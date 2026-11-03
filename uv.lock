@@ -201,7 +201,7 @@ wheels = [
 [[package]]
 name = "arbitrum-dex-arbitrage"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "matplotlib" },
     { name = "polars" },
