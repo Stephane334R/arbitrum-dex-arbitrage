@@ -5,6 +5,58 @@ what can go wrong, how to make it production-grade.
 
 ## Data Collectors
 
+### Swap log collector (`data/collectors/swaps.py`)
+
+**What it does.** Fetches every Uniswap v3 `Swap` event for the registry's pools over the
+last N blocks (default 20,000, `configs/collector.yaml`). It decodes the amounts, sqrtPriceX96,
+liquidity, tick, block number/timestamp, tx hash and log index, and caches them as Parquet in
+`data/cache/swaps/<pool>/<from>_<to>.parquet`.
+
+**Why this implementation.**
+- *File names are the cache index.* Each file covers an inclusive block range, including
+  ranges with zero swaps. Before fetching, the collector computes which ranges are missing
+  per pool and fetches only those. No separate manifest can drift out of sync with the files.
+  Writes go through a temp file plus `os.replace`, so a crash never leaves a partial file
+  that looks complete.
+- *One request serves all pools.* `eth_getLogs` takes a list of addresses. `plan_fetches`
+  splits the window at every pool's gap boundaries, so each chunk asks only for the pools
+  missing it.
+- *Chunk size comes from the provider's real limit.* Alchemy's Free tier rejects
+  `eth_getLogs` ranges over 10 blocks (measured 2026-11-03), so 20,000 blocks means
+  2,000 requests (about 7 minutes at about 5 req/s). If a provider still rejects a range,
+  the chunk is halved recursively.
+- *Retries.* Exponential backoff on HTTP 429/5xx, timeouts and "rate limit" JSON-RPC
+  errors. The first full run needed 883 retries for 2,000 chunks, all of which succeeded.
+- *Big integers are stored as strings.* int256 amounts and the uint160 sqrtPriceX96 do not
+  fit in 64-bit Parquet types. Storing them as floats would silently lose precision.
+- *Timestamps come from the log.* The `blockTimestamp` field avoids one block request per
+  block.
+
+**Assumptions.**
+- The window ends at the **finalized** block by default, not `latest`, so the cache never
+  holds reorgable data. On Arbitrum, finalized lags latest by about 4,000 blocks (about
+  16 min). "The last 20,000 blocks" therefore means the last 20,000 *finalized* blocks.
+- The provider returns `blockTimestamp` in logs. Alchemy does, but it is a recent addition
+  to the JSON-RPC spec. The decoder raises an error if it is missing rather than guessing.
+- Detecting "range too large" errors relies on matching phrases in the error message
+  (heuristic), because providers word it differently.
+
+**What can go wrong.**
+- On a provider with a cap on log *count* rather than block range, a busy range is split
+  repeatedly. That works but is slow.
+- With `head: latest`, a reorg after caching would leave stale rows. The collector only
+  refuses logs flagged `removed`. It does not re-check cached blocks.
+- If a pool is added to the registry later, only that pool's gaps are fetched, which is
+  correct. But a pool whose address changes would leave orphaned cache directories.
+- Many small requests use a lot of the free tier's compute units, and a long backfill can
+  exhaust the monthly quota.
+
+**Production-grade.** Use a paid or self-hosted Nitro node (wide ranges and higher
+throughput), or a log indexer (e.g. a subgraph or HyperSync) for history. Persist a
+`(block_number, block_hash)` table to detect reorgs. Add structured logging and metrics
+(requests, retries, latency). Compact small files periodically. Test the error-path
+heuristics against each provider's real messages.
+
 ## Pool Registry
 
 ### `data/pools/registry.py` → `configs/pools.yaml`
