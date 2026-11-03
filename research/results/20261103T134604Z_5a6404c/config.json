@@ -1,0 +1,94 @@
+{
+  "run_id": "20261103T134604Z_5a6404c",
+  "block_range": [
+    520861829,
+    520881828
+  ],
+  "block_timestamps": [
+    1793705896,
+    1793711405
+  ],
+  "chain_id": 42161,
+  "registry_verified_at_block": 520884405,
+  "pools": [
+    {
+      "address": "0x6f38e884725a116C9C7fBF208e79FE8828a2595F",
+      "fee": 100,
+      "tick_spacing": 1
+    },
+    {
+      "address": "0xC6962004f452bE9203591991D15f6b388e09E8D0",
+      "fee": 500,
+      "tick_spacing": 10
+    },
+    {
+      "address": "0xc473e2aEE3441BF9240Be85eb122aBB059A3B57c",
+      "fee": 3000,
+      "tick_spacing": 60
+    }
+  ],
+  "thresholds_bps": {
+    "100-500": {
+      "sum_of_fees": 6.0,
+      "exact_breakeven": 6.003101560781391
+    },
+    "100-3000": {
+      "sum_of_fees": 31.0,
+      "exact_breakeven": 31.093380150452358
+    },
+    "500-3000": {
+      "sum_of_fees": 35.0,
+      "exact_breakeven": 35.10782472479971
+    }
+  },
+  "gas_assumption": {
+    "block": 520881828,
+    "per_pair": {
+      "100-500": {
+        "gas_units": 290762,
+        "gas_units_l1": 0,
+        "base_fee_wei": 20006000,
+        "l1_base_fee_estimate_wei": 0
+      },
+      "100-3000": {
+        "gas_units": 290750,
+        "gas_units_l1": 0,
+        "base_fee_wei": 20006000,
+        "l1_base_fee_estimate_wei": 0
+      },
+      "500-3000": {
+        "gas_units": 251460,
+        "gas_units_l1": 0,
+        "base_fee_wei": 20006000,
+        "l1_base_fee_estimate_wei": 0
+      }
+    },
+    "method": "node_interface",
+    "label": "NodeInterface.gasEstimateComponents on a SwapRouter02 two-swap round trip (0.1 WETH, state-overridden sender) at block 520881828; router overhead likely overstates a direct-pool arb contract's gas",
+    "router": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
+  },
+  "usdc_usd": 1.0,
+  "rpc_provider": "arb-mainnet.g.alchemy.com",
+  "git_commit": "5a6404cc8d7f237bc3386132f480349d29c0ae7e",
+  "git_dirty": false,
+  "config": {
+    "from_block": null,
+    "to_block": null,
+    "blocks": 20000,
+    "gas": {
+      "swap_router02": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+      "probe_amount_weth": 0.1,
+      "fallback_gas_units": 300000
+    },
+    "usdc_usd": 1.0
+  },
+  "simplifications": [
+    "Gross profit is a SINGLE-TICK UPPER BOUND: constant product on virtual reserves (L, sqrtP) of the current tick, optimal size in closed form, perfect execution at the end-of-block state, no competition.",
+    "In-range liquidity L is forward-filled from Swap events; Mint/Burn between swaps are not replayed.",
+    "Gap threshold is the sum of the two fees (spec); the exact break-even 1/((1-fa)(1-fb))-1 is slightly higher and is what the profit formula uses, so a few gross episodes can have ~0 profit.",
+    "States are end-of-block; intra-block gaps that were opened and closed within one block are invisible.",
+    "Pairs are evaluated independently; simultaneous episodes on pairs sharing a pool compete for the same liquidity, so summed profits overstate what one arbitrageur could capture.",
+    "Gas: one representative estimate per pair (see gas_assumption), priced at each episode's peak-block base fee.",
+    "Profits in USDC with 1 USDC = 1 USD."
+  ]
+}
