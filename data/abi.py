@@ -28,6 +28,7 @@ UNISWAP_V3_POOL = [
     _view("token1", [], [("", "address")]),
     _view("fee", [], [("", "uint24")]),
     _view("tickSpacing", [], [("", "int24")]),
+    _view("liquidity", [], [("", "uint128")]),
     _view(
         "slot0",
         [],
