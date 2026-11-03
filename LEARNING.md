@@ -98,6 +98,47 @@ registry check in CI and alert on any change.
 
 ## Pricing Math
 
+### `data/pricing/v3_price.py`
+
+**What it does.** Converts a pool's `sqrtPriceX96` into a human price (USDC per WETH),
+taking token order and decimals from the registry.
+
+**The conversion.**
+1. `sqrtPriceX96` is √P in Q64.96 fixed point. Dividing by 2⁹⁶ gives √P, and squaring gives
+   `P_raw = sqrtPriceX96² / 2¹⁹²`, the price of one smallest unit of **token0** in smallest
+   units of **token1**.
+2. To get whole tokens, multiply by `10^(decimals0 − decimals1)`.
+3. On Arbitrum, token0 = WETH (address 0x82aF… < 0xaf88…), 18 decimals, and token1 = USDC,
+   6 decimals. So `USDC per WETH = sqrtPriceX96² / 2¹⁹² × 10¹²`. If WETH were token1, the
+   result would be inverted. `quote_per_base` decides this from the registry's token order,
+   not from an assumption.
+4. Worked example (the hand-checked test): `sqrtPriceX96 = 2⁸²`, so √P = 2⁻¹⁴, P_raw = 2⁻²⁸,
+   and the price is 10¹² / 2²⁸ = **3725.2902984619140625** USDC/WETH exactly.
+   Real example from the cache: `3781691934382028564530332` in the 0.05% pool gives about
+   **2278.31** USDC/WETH.
+
+**Why this implementation.** Python `Fraction` keeps every step exact. `sqrtPriceX96²` is
+about 2³²⁰, far beyond float64's 53-bit mantissa, so the float form `(s/2**96)**2*1e12` is
+only an approximation. The float column for analytics is computed exactly first and rounded
+once.
+
+**Assumptions.** The pool is a Uniswap v3-style pool whose `slot0`/`Swap` sqrtPriceX96 is
+token1/token0 in raw units. This is a *mid* (spot) price: no fee, no price impact.
+
+**What can go wrong.** Mixing up token order or decimals gives a price that is off by 10¹²
+or inverted. Using the Swap's `sqrtPriceX96` as the "trade price" is wrong, because it is
+the price *after* the swap. The trade's average price is `−amount1/amount0`, adjusted for
+decimals and fee.
+
+**Verification.** `tests/test_v3_price_onchain.py` reads `pool.slot0()` at the block of each
+pool's latest cached swap. It asserts that `sqrtPriceX96` and the tick are *exactly* equal,
+not merely equal within rounding. This works because in v3 only `swap()` moves the price,
+so `slot0` at the end of block N equals the last Swap in block N.
+
+**Production-grade.** Use vectorised exact math (e.g. integer arithmetic in Rust or numpy
+object arrays) for millions of rows. Add an `effective_price` from swap amounts. Add
+tick ↔ price helpers with tests against Uniswap's TickMath.
+
 ## Replay Engine
 
 ## Analytics
