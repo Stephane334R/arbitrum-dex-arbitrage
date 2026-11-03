@@ -1,0 +1,17 @@
+# Replay settings (python -m research.replay.run).
+
+# Block window. null/null = the last `blocks` blocks covered by the swap cache for every pool.
+from_block: null
+to_block: null
+blocks: 20000
+
+gas:
+  # Uniswap SwapRouter02 on Arbitrum, used only as the target of a simulated two-swap call.
+  # Verified on-chain at run time (code exists, factory() and WETH9() match the registry).
+  swap_router02: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
+  probe_amount_weth: 0.1
+  # FIXED ESTIMATE, used only if NodeInterface simulation fails. Labelled in results.
+  fallback_gas_units: 300000
+
+# Assumption: 1 USDC = 1 USD (profits are computed in USDC).
+usdc_usd: 1.0

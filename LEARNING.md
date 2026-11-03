@@ -141,6 +141,76 @@ tick ↔ price helpers with tests against Uniswap's TickMath.
 
 ## Replay Engine
 
+### `research/replay/` (`replay.py`, `gas.py`, `run.py`)
+
+**What it does.** Replays the cached Swap logs block by block. It reconstructs each pool's
+end-of-block state, measures the price gap for every pool pair, and flags blocks where the
+gap exceeds the sum of the two fees. It sizes the optimal two-pool arbitrage under a
+single-tick model and subtracts gas. It then groups consecutive flagged blocks into
+episodes and saves metrics, episodes, config and charts to `research/results/<run_id>/`.
+
+**Why this implementation.**
+- *Segments instead of 20,000 rows.* State only changes in blocks with a swap. The window is
+  split into about 670 constant-state segments, each weighted by the number of blocks it
+  spans. This is exact and fast.
+- *Seeded state.* A pool that does not swap early in the window gets its state from `slot0()`
+  and `liquidity()` at `from_block - 1`, cached as Parquet. Forward-filling from nothing
+  would leave it undefined.
+- *Closed-form sizing.* Two chained constant-product swaps give `out(d) = a·d/(b + c·d)`,
+  so the optimum is `d* = (√(ab) − b)/c` and the profit is `(√a − √b)²/c`. A test checks
+  this against brute-force simulation.
+- *Gas from NodeInterface.* `gasEstimateComponents` simulates a real SwapRouter02 round trip
+  (WETH → USDC in one pool → WETH in the other), using a state-overridden sender balance.
+  The router address is verified on-chain first. Replaying an observed arbitrage bot's
+  transaction reverted, as such state-dependent transactions do, so a router call was the
+  feasible representative transaction. The estimates are 251k–291k gas, L1 component 0,
+  which is about $0.013 at the base fee of 0.02 gwei.
+- *Censoring is explicit.* Episodes touching the window edges are flagged. Durations exclude
+  episodes still open at the end.
+
+**Assumptions.** End-of-block states (no intra-block view). Liquidity L is the value from
+the pool's last Swap. Each pair is evaluated independently. 1 USDC = 1 USD. One gas probe
+per pair, priced at each episode's peak-block base fee.
+
+**What can go wrong / limitations.**
+- **"Upper bound" is optimistic, not strict.** It assumes perfect execution at the end-of-block
+  state with no competitor. But the single-tick model can *under*state profit if the trade
+  crosses into a tick with more liquidity. It overstates profit if it crosses into less.
+  `within_tick_range` only says whether the trade could reach the next tick that *might*
+  be initialized. For the largest episode, an on-chain check of the 0.01% pool's ticks
+  showed L unchanged for 8 ticks, so that episode's estimate is exact on that side.
+- Mint/Burn between swaps change L without a Swap event, so the replayed L can be stale.
+- Gaps opened and closed within one block are invisible. On Arbitrum's FCFS sequencer this
+  is probably where most arbitrage happens, so the episode count is a lower bound on
+  *opportunities* and says nothing about how fast bots react.
+- Summing across pairs double-counts shared liquidity.
+- SwapRouter02 gas probably overstates a direct-to-pool arbitrage contract.
+
+**Production-grade.** Simulate multiple ticks with `tickBitmap` and `ticks()`, or call
+QuoterV2 at the block, to get exact sizing. Replay Mint/Burn so L is right. Measure gas
+from a Foundry-deployed arbitrage contract on a fork. Use per-transaction (intra-block)
+ordering from receipts. Model competition and latency.
+
 ## Analytics
+
+### `research/analytics/charts.py` and the metrics in `replay.headline_metrics`
+
+**What it does.** Computes the headline metrics (N, H, S, G, M, P, duration quantiles, gross
+vs net) and draws three PNG charts: per-block gap distribution per pair with the fee
+threshold, episode duration histogram, and pool prices around the largest episode.
+
+**Why.** The metrics come straight from `episodes.parquet`. The summary's headline sentence
+is a template filled in from those numbers, so nothing in it is hand-written. Each pool has
+a fixed colour across charts, and colours come from a colour-blind-validated palette.
+
+**Assumptions.** Gap histograms weight each segment by the blocks it spans. Duration
+quantiles use closed episodes only, with the nearest-rank method.
+
+**What can go wrong.** With few episodes (9 in the first run), medians and p90 are noisy.
+Quote them with the count. Arbitrum timestamps have 1-second resolution, so durations
+under a second show as 0 s.
+
+**Production-grade.** Run over many windows and report confidence intervals. Add an
+interactive dashboard. Store metrics in a table to compare across runs.
 
 ## Contracts
