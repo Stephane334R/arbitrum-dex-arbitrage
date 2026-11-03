@@ -13,6 +13,7 @@ dependencies = [
     "pyarrow>=26.0.1",
     "python-dotenv>=1.2.4",
     "pyyaml>=6.0.3",
+    "requests>=2.34.2",
     "web3>=8.0.0",
 ]
 
@@ -26,3 +27,5 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["integration: needs ARBITRUM_RPC_URL (archive RPC) and/or the local swap cache"]

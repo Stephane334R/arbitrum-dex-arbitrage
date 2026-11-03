@@ -1,0 +1,21 @@
+# Swap log collector settings (data/collectors/swaps.py).
+
+# Number of blocks to collect, ending at `head`.
+blocks: 20000
+
+# Last block of the window. "finalized" (default) only collects blocks that can no longer
+# be reorged, so cached Parquet files never need to be invalidated. On Arbitrum One this
+# lags "latest" by roughly 4,000 blocks (~16 min, measured 2026-11-03). Use "latest" for
+# fresher data, accepting a small reorg risk in the cache.
+head: finalized
+
+# Max blocks per eth_getLogs call. Alchemy's Free tier rejects ranges above 10 blocks
+# (measured 2026-11-03). Raise this on a paid plan. If the provider still rejects a range,
+# the collector halves the chunk and retries.
+max_block_range: 10
+
+# Parallel eth_getLogs requests. Results are still written in block order.
+concurrency: 4
+
+# Write a Parquet file per pool once this many contiguous blocks are buffered.
+flush_blocks: 2000
