@@ -165,6 +165,26 @@ episodes and saves metrics, episodes, config and charts to `research/results/<ru
   transaction reverted, as such state-dependent transactions do, so a router call was the
   feasible representative transaction. The estimates are 251k–291k gas, L1 component 0,
   which is about $0.013 at the base fee of 0.02 gwei.
+- *Why the L1 component is 0 (measured, not assumed).* On Arbitrum, `gasEstimate` is the
+  L2 execution gas plus an L1 data cost converted into L2 gas units. On 2026-11-03 that L1
+  part was 0. The decoding was checked, not just trusted:
+  - The selector `c94e6eeb` is `gasEstimateComponents(address,bool,bytes)`.
+  - The call returns exactly 4 words in the documented order, `[259305, 0, 20156000, 0]`.
+  - `gasEstimateL1Component` also returns 0, and setting a `gasPrice` changes nothing.
+
+  The chain itself shows the L1 data price is zero:
+  - `ArbGasInfo.getL1BaseFeeEstimate()` returns 0.
+  - `getPricesInWei()` charges 0 per L1 calldata byte.
+  - Real receipts in the latest block all have `gasUsedForL1 = 0`.
+
+  The cause is Arbitrum's adaptive L1 pricing. `getL1PricingSurplus()` shows about
+  0.408 ETH collected beyond what batch posting to Ethereum has cost. While there is a
+  surplus, the L1 price is pushed down, here to zero. That is temporary: once the surplus
+  is spent, the price rises again and transactions pay an L1 component. The replay calls
+  NodeInterface again on every run, so it picks this up. But it probes **once per run**,
+  at the window's last block. It would miss a change in L1 price *during* the window.
+  `config.json` records `gas_units_l1` and `l1_base_fee_estimate_wei` so the zero is
+  visible in each result.
 - *Censoring is explicit.* Episodes touching the window edges are flagged. Durations exclude
   episodes still open at the end.
 
