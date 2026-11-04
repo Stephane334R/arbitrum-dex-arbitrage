@@ -334,10 +334,68 @@ per pair, priced at each episode's peak-block base fee.
 - Summing across pairs double-counts shared liquidity.
 - SwapRouter02 gas probably overstates a direct-to-pool arbitrage contract.
 
-**Production-grade.** Simulate multiple ticks with `tickBitmap` and `ticks()`, or call
-QuoterV2 at the block, to get exact sizing. Replay Mint/Burn so L is right. Measure gas
+**Production-grade.** Exact multi-tick sizing is now done at the peak block (see the next
+section). Replay Mint/Burn so L is right. Measure gas
 from a Foundry-deployed arbitrage contract on a fork. Use per-transaction (intra-block)
 ordering from receipts. Model competition and latency.
+
+### Exact multi-tick sizing (`research/replay/multitick.py`)
+
+**What it does.** For each episode, it reads tick snapshots of the cheap and expensive pools at
+the episode's peak block (`data/collectors/ticks.py`). It then finds the USDC input that
+maximises `USDC out − USDC in` for the round trip USDC → WETH (cheap pool) → USDC (expensive
+pool), running both legs through the exact swap port. Its size and gross profit replace the
+single-tick ones in `episodes.parquet` and `summary.md`; the single-tick values stay as
+`*_single_tick` columns. It also re-runs the single-tick formula with the *on-chain* liquidity
+(`st_onchain_l_gross_usdc`), so the single-tick error splits into three causes: stale
+liquidity, ticks crossed, and integer rounding.
+
+**Why this implementation.**
+- *Search, not a formula.* Across initialized ticks, profit has no closed form. Exact profit is
+  concave in size, because each leg's marginal price only gets worse, so a doubling search
+  followed by a ternary search finds the optimum in about 100 swap simulations per episode.
+- *A noise floor.* Below about 1 USDC, wei rounding can make profit dip and recover, so the
+  doubling search does not stop on a decrease before 2²⁰ raw units.
+- *The on-chain state, checked against the replay.* The run fails if slot0's sqrtPriceX96 at the
+  peak block differs from the replay's state, which it must not, because only swaps move the
+  price. It records whether liquidity differs, which Mint/Burn can cause.
+- *A same-window comparison.* The swap collector now accepts a fixed finalized `head` block, and
+  `configs/replay.yaml` pins the first run's window. So the new run
+  (`20261104T211216Z_3bad7ce`) re-finds the same 9 episodes, and the two numbers differ only
+  in the sizing.
+
+**Result.** The single-tick approximation gave $0.023422 gross over 9 episodes; the exact value
+is $0.023342. It **overstated gross profit by $0.000080 (0.34%)**:
+- $0.000074 from the one episode whose optimal trade crosses an initialized tick (−1.0% for
+  that episode);
+- $0.000006 of integer rounding over the other 8;
+- ≈ $0 from stale liquidity: one episode had a Mint/Burn since the last swap, with a
+  negligible effect.
+
+The approximation was good here because these arbitrages are tiny (about $1–$57 of input).
+It will matter more for larger gaps, and in thin pools such as the 0.01% pool, where 10 WETH
+crosses 221 ticks.
+
+**Assumptions.** The peak block is still chosen with the single-tick gross, as before;
+recomputing every above-threshold segment exactly would cost one tick snapshot per segment.
+The optimal size is accurate to a few raw units (a few 10⁻⁶ USDC), because rounding breaks
+exact concavity at that scale. It assumes perfect execution at the end-of-block state with no
+competitor, as before.
+
+**What can go wrong.**
+- If the peak by exact profit is a different segment than the peak by single-tick profit, the
+  episode's exact peak is understated.
+- A large arbitrage in a thin pool needs a wide tick window. The window widens automatically up
+  to `max_words_each_side`, then the run fails rather than guessing.
+- Each new peak block costs one tick snapshot per pool: one `tickBitmap` call per word plus one
+  `ticks()` call per initialized tick. Measured in this run's cache, the median is 12
+  initialized ticks per word for the 0.01% pool and 256 (every tick) for the 0.05% pool. The
+  results are cached afterwards.
+
+**Production-grade.** Size every above-threshold segment exactly and choose the peak by exact
+profit. Update tick maps incrementally from Mint/Burn logs instead of re-reading storage per
+block. Optimise the full route (both directions, all pairs together, shared-pool contention).
+Check the chosen sizes against a fork simulation of the real arbitrage contract.
 
 ## Analytics
 

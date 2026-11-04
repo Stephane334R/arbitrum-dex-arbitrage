@@ -10,7 +10,7 @@ Large integers (amounts are int256, sqrtPriceX96 is uint160, liquidity is uint12
 fit in Parquet/Polars 64-bit integer types, so they are stored as exact base-10 strings.
 Convert them with Python `int()` (exact), not float.
 
-Usage:  uv run python -m data.collectors.swaps
+Usage:  uv run python -m data.collectors.swaps [head_block]
 """
 
 from __future__ import annotations
@@ -196,9 +196,17 @@ class _Buffer:
     rows: list[dict] = field(default_factory=list)
 
 
-def resolve_head(client: RpcClient, head: str) -> int:
+def resolve_head(client: RpcClient, head: str | int) -> int:
+    """`head` is a tag (finalized|safe|latest) or a fixed block number. A fixed block must be
+    finalized already, so a past window can be re-collected exactly without reorg risk."""
+    if isinstance(head, int) or (isinstance(head, str) and head.isdigit()):
+        block = int(head)
+        finalized = int(client.call("eth_getBlockByNumber", ["finalized", False])["number"], 16)
+        if block > finalized:
+            raise ValueError(f"head {block} is not finalized yet (finalized = {finalized})")
+        return block
     if head not in ("finalized", "safe", "latest"):
-        raise ValueError(f"head must be finalized|safe|latest, got {head!r}")
+        raise ValueError(f"head must be finalized|safe|latest or a block number, got {head!r}")
     return int(client.call("eth_getBlockByNumber", [head, False])["number"], 16)
 
 
@@ -252,9 +260,13 @@ def collect(client: RpcClient, pools: list[str], window: Range, cfg: dict, cache
     return len(chunks)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """Optional argument: a block number overriding `head` from configs/collector.yaml."""
+    argv = sys.argv[1:] if argv is None else argv
     url = load_rpc_url()
     cfg = yaml.safe_load(CONFIG_PATH.read_text())
+    if argv:
+        cfg["head"] = int(argv[0])
     registry = load_registry()
     pools = [p["address"] for p in registry["pools"]]
     client = RpcClient(url)

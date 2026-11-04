@@ -6,14 +6,17 @@ those gaps last?
 
 ## Latest result
 
-Run [`20261103T134604Z_5a6404c`](research/results/20261103T134604Z_5a6404c/summary.md):
+Run [`20261104T211216Z_3bad7ce`](research/results/20261104T211216Z_3bad7ce/summary.md):
 blocks 520,861,829 – 520,881,828, 2026-11-03 11:38:16 → 13:10:05 UTC. Pools: the 0.01%,
 0.05% and 0.30% fee tiers.
 
 **Headline.** Over 1.5 hours (20,000 blocks, 1,140 swaps), the WETH/USDC pools showed 9
 episodes with a gap above the fee threshold. 56% of closed episodes lasted one block. Their
-single-tick gross upper bound sums to $0.02, and none is profitable after gas (mean $0.013
-per arbitrage).
+exact multi-tick gross profit sums to $0.0233, and none is profitable after gas (mean $0.013
+per arbitrage). The single-tick approximation used in the first run
+([`20261103T134604Z_5a6404c`](research/results/20261103T134604Z_5a6404c/summary.md)) gave
+$0.0234: it overstated gross profit by $0.00008 (0.34%), almost all from the one episode whose
+optimal trade crosses an initialized tick.
 
 | Metric | Value |
 |---|---|
@@ -25,12 +28,13 @@ per arbitrage).
 | Closed within 1 block (P) | 55.6% of closed episodes |
 | Median / p90 duration (blocks) | 1 / 10 |
 | Median / p90 duration (seconds) | 0 / 2 |
-| Total gross profit, single-tick upper bound (USD) | $0.02 |
+| Total gross profit, exact multi-tick (USD) | $0.0233 |
+| Total gross profit, single-tick approximation (USD) | $0.0234 |
 | Total net profit, net-positive episodes only (USD) | $0.00 |
 
 Nine episodes in 1.5 hours is a small sample: treat the medians as indicative only.
 
-![Episode duration histogram](research/results/20261103T134604Z_5a6404c/episode_durations.png)
+![Episode duration histogram](research/results/20261104T211216Z_3bad7ce/episode_durations.png)
 
 ## How to run
 
@@ -51,7 +55,7 @@ port against QuoterV2 at the pinned block, run `uv run python -m research.parity
 - `data/collectors`: fetches Swap logs, block headers, pool state and initialized-tick snapshots (tickBitmap + `ticks()`), cached as Parquet under `data/cache/`.
 - `data/pricing`: exact `sqrtPriceX96` → USDC-per-WETH conversion; exact integer port of the Uniswap v3 swap (`v3_swap.py`).
 - `research/parity`: QuoterV2 parity run → `tests/vectors/v3_swaps.json`.
-- `research/replay` + `research/analytics`: block-level gaps, single-tick sizing, gas, episodes, metrics and charts → `research/results/`.
+- `research/replay` + `research/analytics`: block-level gaps, single-tick and exact multi-tick sizing, gas, episodes, metrics and charts → `research/results/`.
 
 ## Status
 
@@ -65,15 +69,16 @@ port against QuoterV2 at the pinned block, run `uv run python -m research.parity
 | Done | Initialized-tick snapshot collector | `tests/test_v3_swap_parity.py` (integration) |
 | Done | Exact Uniswap v3 swap port (multi-tick) | `tests/test_v3_swap_math.py`; 30/30 exact QuoterV2 matches, run `20261104T204637Z_3c7738a` |
 | In progress | LEARNING.md, updated after each component | `LEARNING.md` |
-| Planned | Use the exact swap port for multi-tick sizing in the replay | none yet |
+| Done | Exact multi-tick sizing per episode (peak block), single-tick kept for comparison | `tests/test_replay_multitick.py`; run `20261104T211216Z_3bad7ce` |
 | Planned | Foundry arbitrage contract and fork tests (`contracts/`) | none yet |
 | Planned | Longer windows and more pools/DEXs | none yet |
 
 ## Limitations
 
-- **Single-tick upper bound.** Gross profit assumes constant product on the current tick's
-  virtual reserves, perfect execution at the end-of-block state, and no competition. It can
-  still understate or overstate profit when a trade crosses initialized ticks.
+- **Exact sizing, idealised execution.** Gross profit is the exact multi-tick optimum on the
+  on-chain state at each episode's peak block, but it still assumes perfect execution at the
+  end-of-block state and no competition. The peak block itself is chosen with the single-tick
+  approximation.
 - **Gas estimate.** One NodeInterface simulation per pair, routed through SwapRouter02 rather
   than a dedicated arbitrage contract, so it likely overstates gas. It is priced at each
   episode's peak-block base fee. The L1 data price was 0 at the probe block because of
@@ -90,6 +95,11 @@ port against QuoterV2 at the pinned block, run `uv run python -m research.parity
 ## Changelog
 
 ### 2026-11-04
+- Replay: exact multi-tick sizing and gross profit at each episode's peak block, using the
+  swap port on on-chain tick snapshots; single-tick numbers kept as comparison columns.
+  Run `20261104T211216Z_3bad7ce`: single-tick overstated gross by 0.34%.
+- Swap collector: `head` can be a fixed (finalized) block number, to re-collect a past window;
+  `configs/replay.yaml` pins the first run's window.
 - Exact Python port of the Uniswap v3 swap (`data/pricing/v3_swap.py`): TickMath,
   SqrtPriceMath, SwapMath, FullMath, TickBitmap and the swap loop, integers only.
 - Initialized-tick snapshot collector (`data/collectors/ticks.py`), Parquet cache per bitmap word.

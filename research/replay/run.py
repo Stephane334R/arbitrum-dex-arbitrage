@@ -26,6 +26,7 @@ from data.pricing.v3_price import usdc_per_weth
 from data.rpc import RpcClient, get_web3, load_rpc_url, provider_name, redact
 from research.analytics import charts
 from research.replay.gas import gas_for_pairs
+from research.replay.multitick import size_episodes
 from research.replay.replay import (
     build_segments,
     exact_breakeven_bps,
@@ -96,6 +97,18 @@ def run(url: str) -> int:
     # Episodes; right-censored durations are measured to the window end (a lower bound).
     episodes = find_episodes(rows, (lo, hi), window_end_close_ts=window_ts[1])
 
+    # Exact multi-tick sizing at each episode's peak block. The single-tick numbers are kept as
+    # *_single_tick comparison columns; peak_gross_usdc / size_usdc become the multi-tick values.
+    if not episodes.is_empty():
+        mt = pl.DataFrame(size_episodes(client, episodes, segments, metas, cfg["multitick"]))
+        episodes = (
+            pl.concat([episodes, mt], how="horizontal")
+            .rename({"peak_gross_usdc": "peak_gross_usdc_single_tick", "size_usdc": "size_usdc_single_tick"})
+            .with_columns(pl.col("mt_gross_usdc").alias("peak_gross_usdc"), pl.col("mt_size_usdc").alias("size_usdc"))
+        )
+        print(f"multi-tick sizing: {episodes.height} episodes, single-tick gross "
+              f"${episodes['peak_gross_usdc_single_tick'].sum():.4f} vs exact ${episodes['peak_gross_usdc'].sum():.4f}")
+
     pairs = [(a.fee, b.fee) for a, b in combinations(metas, 2)]
     gas = gas_for_pairs(client, cfg, registry, pairs, hi)
     print(f"gas: {gas['label']}")
@@ -109,7 +122,8 @@ def run(url: str) -> int:
             .with_columns(
                 (pl.col("gas_units") * pl.col("base_fee_wei") / 1e18
                  * (pl.col("price_cheap") + pl.col("price_expensive")) / 2 * cfg["usdc_usd"]).alias("peak_gas_usdc"))
-            .with_columns((pl.col("peak_gross_usdc") - pl.col("peak_gas_usdc")).alias("peak_net_usdc"))
+            .with_columns((pl.col("peak_gross_usdc") - pl.col("peak_gas_usdc")).alias("peak_net_usdc"),
+                          (pl.col("peak_gross_usdc_single_tick") - pl.col("peak_gas_usdc")).alias("peak_net_usdc_single_tick"))
         )
 
     metrics = headline_metrics(segments, episodes, n_swaps, window_ts, (lo, hi))
@@ -157,9 +171,14 @@ def run(url: str) -> int:
 
 
 SIMPLIFICATIONS = [
-    "Gross profit is a SINGLE-TICK UPPER BOUND: constant product on virtual reserves (L, sqrtP) of the current "
-    "tick, optimal size in closed form, perfect execution at the end-of-block state, no competition.",
-    "In-range liquidity L is forward-filled from Swap events; Mint/Burn between swaps are not replayed.",
+    "Gross profit is the EXACT multi-tick optimum at the episode's peak block: both legs run through the "
+    "Uniswap v3 swap port (data/pricing/v3_swap.py, QuoterV2-parity tested) on the on-chain tick state at that "
+    "block; optimal size by integer search (within a few raw units of the true optimum). It still assumes "
+    "perfect execution at the end-of-block state and no competition.",
+    "The peak block is chosen by the SINGLE-TICK gross (constant product on the current tick's virtual "
+    "reserves), as in the first run; the single-tick numbers are kept as *_single_tick comparison columns.",
+    "Gap detection uses in-range liquidity forward-filled from Swap events (Mint/Burn between swaps are not "
+    "replayed); the multi-tick sizing reads the real on-chain liquidity at the peak block instead.",
     "Gap threshold is the sum of the two fees (spec); the exact break-even 1/((1-fa)(1-fb))-1 is slightly higher "
     "and is what the profit formula uses, so a few gross episodes can have ~0 profit.",
     "States are end-of-block; intra-block gaps that were opened and closed within one block are invisible.",
@@ -168,6 +187,48 @@ SIMPLIFICATIONS = [
     "Gas: one representative estimate per pair (see gas_assumption), priced at each episode's peak-block base fee.",
     "Profits in USDC with 1 USDC = 1 USD.",
 ]
+
+
+def single_vs_multi_section(episodes: pl.DataFrame) -> list[str]:
+    """How much the single-tick approximation overstated gross profit, split into three causes:
+    stale liquidity (replay L vs on-chain L at the peak block), initialized ticks crossed by the
+    exact optimal trade, and integer rounding (episodes whose exact trade crosses no tick)."""
+    e = episodes.with_columns(
+        ((pl.col("mt_ticks_crossed_cheap") + pl.col("mt_ticks_crossed_expensive")) > 0).alias("_crosses"))
+    st = float(e["peak_gross_usdc_single_tick"].sum())
+    st_l = float(e["st_onchain_l_gross_usdc"].sum())
+    mt = float(e["peak_gross_usdc"].sum())
+    over = st - mt
+    diff = lambda d: float((d["st_onchain_l_gross_usdc"] - d["peak_gross_usdc"]).sum())
+    crossing, flat = e.filter(pl.col("_crosses")), e.filter(~pl.col("_crosses"))
+    pct = f"{100 * over / mt:,.2f}% of the exact value" if mt > 0 else "the exact value is 0"
+    n_liq = int((~e["liquidity_matches_replay"]).sum())
+    lines = [
+        "", "## Single-tick vs exact multi-tick", "",
+        f"Summed over the {e.height} episodes, the single-tick approximation gave **${st:,.6f}** gross; the exact "
+        f"multi-tick simulation at the same peak blocks gives **${mt:,.6f}**. The single-tick number "
+        f"{'overstated' if over > 0 else 'understated'} gross profit by **${abs(over):,.6f}** ({pct}).",
+        "",
+        f"- Stale liquidity: ${st - st_l:,.6f}. The single-tick formula re-run with the on-chain liquidity at the "
+        f"peak block gives ${st_l:,.6f} ({n_liq} of {e.height} episodes had in-range liquidity changed by a "
+        f"Mint/Burn since the pool's last swap).",
+        f"- Tick crossings: ${diff(crossing):,.6f}, from the {crossing.height} episode(s) whose exact optimal trade "
+        f"crosses at least one initialized tick.",
+        f"- Integer rounding: ${diff(flat):,.6f} over the other {flat.height} episodes (the exact profit is a whole "
+        f"number of raw USDC units, 1e-6 USDC; the single-tick formula is continuous).",
+        "",
+        "| Pair | Peak block | Gap (bps) | Single-tick size / gross (USD) | Single-tick, on-chain L, gross (USD) | "
+        "Multi-tick size / gross (USD) | Ticks crossed (cheap, exp.) | L matches replay |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for r in e.sort("peak_block").iter_rows(named=True):
+        lines.append(
+            f"| {r['pair']} | {r['peak_block']} | {r['peak_gap_bps']:.2f} | {r['size_usdc_single_tick']:,.2f} / "
+            f"{r['peak_gross_usdc_single_tick']:.6f} | {r['st_onchain_l_gross_usdc']:.6f} | {r['size_usdc']:,.2f} / "
+            f"{r['peak_gross_usdc']:.6f} | {r['mt_ticks_crossed_cheap']}, {r['mt_ticks_crossed_expensive']} | "
+            f"{'yes' if r['liquidity_matches_replay'] else 'no'} |")
+    lines += ["", "Sizes differ more than profits because profit is flat near the optimum."]
+    return lines
 
 
 def _fmt(v, spec=",.2f", none="n/a"):
@@ -186,7 +247,7 @@ def render_summary(run_id: str, m: dict, episodes: pl.DataFrame, gas: dict, conf
     headline = (
         f"Over {m['hours']:.1f} hours ({m['n_blocks']:,} blocks, {m['n_swaps']:,} swaps), the WETH/USDC pools showed "
         f"{G:,} episodes with a gap above the fee threshold, {_fmt(pct1, '.0f')}% of closed episodes lasted one block, "
-        f"and their single-tick gross upper bound sums to ${m['total_gross_usdc']:,.2f}; {net_clause}."
+        f"and their exact multi-tick gross profit sums to ${m['total_gross_usdc']:,.4f}; {net_clause}."
     )
     table = [
         ("Blocks (N)", f"{m['n_blocks']:,} ({window[0]}..{window[1]})"),
@@ -198,10 +259,11 @@ def render_summary(run_id: str, m: dict, episodes: pl.DataFrame, gas: dict, conf
         ("Median / p90 duration (blocks)", f"{_fmt(m.get('median_duration_blocks'), '.0f')} / {_fmt(m.get('p90_duration_blocks'), '.0f')}"),
         ("Median / p90 duration (seconds)", f"{_fmt(m.get('median_duration_s'), '.0f')} / {_fmt(m.get('p90_duration_s'), '.0f')}"),
         ("Episodes touching window edge (censored)", f"{m.get('censored_episodes', 0)}"),
-        ("Total gross profit, single-tick upper bound (USD)", f"${m['total_gross_usdc']:,.2f}"),
-        ("Total net profit, net-positive episodes only (USD)", f"${m['total_net_usdc']:,.2f}"),
-        ("Peak trade stays before the next tickSpacing boundary (single-tick math provably exact; crossing a "
-         "boundary does not mean L changes)", f"{_fmt(m.get('pct_within_tick_range'), '.1f')}% of episodes"),
+        ("Total gross profit, exact multi-tick (USD)", f"${m['total_gross_usdc']:,.4f}"),
+        ("Total gross profit, single-tick approximation (USD), for comparison", f"${m.get('total_gross_usdc_single_tick', 0):,.4f}"),
+        ("Total net profit, net-positive episodes only (USD)", f"${m['total_net_usdc']:,.4f}"),
+        ("Single-tick peak trade stays before the next tickSpacing boundary (single-tick math provably exact; "
+         "crossing a boundary does not mean L changes)", f"{_fmt(m.get('pct_within_tick_range'), '.1f')}% of episodes"),
     ]
     lines = [f"# Replay {run_id}", "", f"**Headline.** {headline}", "", "| Metric | Value |", "|---|---|"]
     lines += [f"| {k} | {v} |" for k, v in table]
@@ -214,14 +276,16 @@ def render_summary(run_id: str, m: dict, episodes: pl.DataFrame, gas: dict, conf
             pl.col("peak_gap_bps").max().alias("max_gap_bps"),
             pl.col("duration_blocks").median().alias("median_blocks"),
             pl.col("peak_gross_usdc").sum().alias("gross_usd"),
+            pl.col("peak_gross_usdc_single_tick").sum().alias("gross_st_usd"),
             pl.col("peak_gas_usdc").mean().alias("mean_gas_usd"),
         ).sort("pair"))
         lines += ["", "## Per pair", "",
-                  "| Pair (fee tiers) | Threshold (bps) | Episodes | Net-positive | Max gap (bps) | Median duration (blocks) | Gross upper bound (USD) | Mean gas (USD) |",
-                  "|---|---|---|---|---|---|---|---|"]
+                  "| Pair (fee tiers) | Threshold (bps) | Episodes | Net-positive | Max gap (bps) | Median duration (blocks) | Gross, multi-tick (USD) | Gross, single-tick (USD) | Mean gas (USD) |",
+                  "|---|---|---|---|---|---|---|---|---|"]
         for r in per.iter_rows(named=True):
             lines.append(f"| {r['pair']} | {r['threshold_bps']:g} | {r['episodes']} | {r['net_positive']} | {r['max_gap_bps']:.1f} | "
-                         f"{r['median_blocks']:.0f} | ${r['gross_usd']:,.2f} | ${r['mean_gas_usd']:.4f} |")
+                         f"{r['median_blocks']:.0f} | ${r['gross_usd']:,.4f} | ${r['gross_st_usd']:,.4f} | ${r['mean_gas_usd']:.4f} |")
+        lines += single_vs_multi_section(episodes)
 
     lines += ["", "## Definitions", "",
               "- An **episode** is a run of consecutive blocks in which the same pool pair's end-of-block gap exceeds the "

@@ -6,7 +6,9 @@ blocks: 20000
 # Last block of the window. "finalized" (default) only collects blocks that can no longer
 # be reorged, so cached Parquet files never need to be invalidated. On Arbitrum One this
 # lags "latest" by roughly 4,000 blocks (~16 min, measured 2026-11-03). Use "latest" for
-# fresher data, accepting a small reorg risk in the cache.
+# fresher data, accepting a small reorg risk in the cache. A block number (must already be
+# finalized) re-collects a fixed past window; it can also be passed on the command line:
+# `uv run python -m data.collectors.swaps 520881828`.
 head: finalized
 
 # Max blocks per eth_getLogs call. Alchemy's Free tier rejects ranges above 10 blocks

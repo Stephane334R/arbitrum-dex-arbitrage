@@ -1,4 +1,5 @@
 """Offline tests for the swap collector: log decoding and cache range bookkeeping."""
+import pytest
 
 from eth_abi import encode
 
@@ -66,3 +67,20 @@ def test_cache_roundtrip_and_index(tmp_path):
     assert missing_ranges((100, 350), covered_ranges(pool_dir)) == [(300, 350)]
     df = load_swaps(POOL, cache_root=tmp_path)
     assert df.height == 1 and df["sqrt_price_x96"][0] == str(2**82)
+
+
+def test_resolve_head_accepts_a_finalized_block_number():
+    from data.collectors.swaps import resolve_head
+
+    class FakeClient:
+        def call(self, method, params):
+            assert method == "eth_getBlockByNumber"
+            return {"number": hex(1000)}
+
+    assert resolve_head(FakeClient(), "finalized") == 1000
+    assert resolve_head(FakeClient(), 900) == 900
+    assert resolve_head(FakeClient(), "900") == 900
+    with pytest.raises(ValueError):
+        resolve_head(FakeClient(), 1001)  # not finalized yet: could still be reorged
+    with pytest.raises(ValueError):
+        resolve_head(FakeClient(), "pending")

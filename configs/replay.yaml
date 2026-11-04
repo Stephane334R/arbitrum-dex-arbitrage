@@ -1,8 +1,9 @@
 # Replay settings (python -m research.replay.run).
 
 # Block window. null/null = the last `blocks` blocks covered by the swap cache for every pool.
-from_block: null
-to_block: null
+# Pinned to the first run's window (20261103T134604Z_5a6404c) so results stay comparable.
+from_block: 520861829
+to_block: 520881828
 blocks: 20000
 
 gas:
@@ -15,3 +16,11 @@ gas:
 
 # Assumption: 1 USDC = 1 USD (profits are computed in USDC).
 usdc_usd: 1.0
+
+# Exact multi-tick sizing at each episode's peak block (research/replay/multitick.py).
+# Tick snapshots come from data/collectors/ticks.py; the window is widened automatically when
+# the optimal trade needs more tickBitmap words.
+multitick:
+  words_each_side: 1
+  widen_step: 2
+  max_words_each_side: 16

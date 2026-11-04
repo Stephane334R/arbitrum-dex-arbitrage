@@ -293,6 +293,8 @@ def headline_metrics(segments: pl.DataFrame, episodes: pl.DataFrame, n_swaps: in
         "median_duration_s": q("duration_s", 0.5),
         "p90_duration_s": q("duration_s", 0.9),
         "total_gross_usdc": float(episodes["peak_gross_usdc"].sum()),
+        "total_gross_usdc_single_tick": float(episodes["peak_gross_usdc_single_tick"].sum())
+        if "peak_gross_usdc_single_tick" in episodes.columns else None,
         "total_net_usdc": float(pos["peak_net_usdc"].sum()),
         "pct_within_tick_range": 100 * float(episodes["within_tick_range"].fill_null(False).mean()),
     }
