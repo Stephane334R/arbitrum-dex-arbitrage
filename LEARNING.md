@@ -57,6 +57,44 @@ throughput), or a log indexer (e.g. a subgraph or HyperSync) for history. Persis
 (requests, retries, latency). Compact small files periodically. Test the error-path
 heuristics against each provider's real messages.
 
+### Tick snapshot collector (`data/collectors/ticks.py`)
+
+**What it does.** For one pool at one block, it reads `slot0`, `liquidity`, `fee`,
+`tickSpacing`, and every `tickBitmap` word in a window around the current tick. It also reads
+`ticks(t)` (liquidityGross, liquidityNet) for each initialized tick in that window. It returns a
+`PoolSnapshot` for the swap port and caches the reads under
+`data/cache/ticks/<pool>/<block>/` (`state.parquet` plus one `word_<pos>.parquet` per bitmap word).
+
+**Why this implementation.**
+- *The pool's own getters, not TickLens.* `tickBitmap(int16)` and `ticks(int24)` are public on
+  every v3 pool, so there is no extra helper address to verify. The raw bitmap words are also
+  needed anyway: the swap loop stops at word boundaries (see the swap port below).
+- *One file per word is the cache index.* Widening the window (e.g. from ±2 to ±4 words)
+  fetches only the new words. Files are written atomically (temp file + `os.replace`). A zero-row
+  file means "this word was read and is empty", so it is not fetched again.
+- *Checks on every fetch.* Each set bit must have `ticks().initialized == True` and
+  `liquidityGross > 0`. On load, each tick must sit on a multiple of tickSpacing and belong to
+  the word file it is in.
+
+**Assumptions.** The window has a fixed size in words. One word covers 256 × tickSpacing ticks:
+about ±2.6% of price for the 0.01% pool (spacing 1), and about ×4.6 for the 0.30% pool
+(spacing 60). The state read is the state *after* the block. Reads use the pinned block number,
+so they are consistent with each other.
+
+**What can go wrong.**
+- A thin pool runs past the window. The swap port then raises `TickDataOutOfRange`; the parity
+  run widens the window automatically, up to a cap. At block 520884405, 10 WETH into the 0.01%
+  pool crossed 221 initialized ticks, and 300 WETH ran past ±16 words.
+- Dense words mean many calls: one `ticks()` call per initialized tick, at about 5 req/s on
+  Alchemy's free tier.
+- A block number that is later reorged would leave stale cache entries. Pinning a finalized
+  block avoids this.
+
+**Production-grade.** Batch the reads (Multicall3, or a verified TickLens) into one call per
+word. Build the tick map once from Mint/Burn logs and update it incrementally instead of
+re-reading storage at every block. Store the block hash next to the block number to detect
+reorgs.
+
 ## Pool Registry
 
 ### `data/pools/registry.py` → `configs/pools.yaml`
@@ -137,7 +175,97 @@ so `slot0` at the end of block N equals the last Swap in block N.
 
 **Production-grade.** Use vectorised exact math (e.g. integer arithmetic in Rust or numpy
 object arrays) for millions of rows. Add an `effective_price` from swap amounts. Add
-tick ↔ price helpers with tests against Uniswap's TickMath.
+tick ↔ price helpers (done: `get_sqrt_ratio_at_tick` / `get_tick_at_sqrt_ratio` in `v3_swap.py`).
+
+### `data/pricing/v3_swap.py`: exact port of the Uniswap v3 swap
+
+**What it does.** Simulates `UniswapV3Pool.swap` on a `PoolSnapshot`, with the same integer
+results as the deployed contract: amount in, amount out, fee, final sqrtPriceX96 and tick, final
+liquidity, the initialized ticks crossed, and the number of loop steps. It also reproduces
+QuoterV2's `initializedTicksCrossed` counter.
+
+**The math, function by function.** Notation: price P = token1/token0 in raw units, √P is stored
+as `sqrtPriceX96 = √P · 2⁹⁶`, L is the in-range liquidity.
+- *FullMath.mulDiv / mulDivRoundingUp*: `floor(a·b/d)` / `ceil(a·b/d)` with a 512-bit
+  intermediate, reverting if the result exceeds uint256. In Python, big ints make the
+  intermediate free; only the overflow checks have to be added.
+- *UnsafeMath.divRoundingUp*: `ceil(x/y)`; division by zero returns 0, as in the EVM.
+- *LiquidityMath.addDelta*: `L + liquidityNet` with the pool's underflow ('LS') and overflow
+  ('LA') checks.
+- *TickMath.getSqrtRatioAtTick*: `√(1.0001^tick) · 2⁹⁶`. It is built from the binary digits of
+  |tick|: one precomputed Q128.128 factor per bit, multiplied in and shifted. Positive ticks are
+  inverted. The final conversion to Q64.96 rounds **up**, so tick → price → tick round-trips.
+- *TickMath.getTickAtSqrtRatio*: the largest tick whose price is ≤ the given price. It takes
+  log₂ from the most significant bit plus 14 fractional bits (square, check ≥ 2, shift), converts
+  that to base √1.0001, and then picks between two candidate ticks with one exact
+  getSqrtRatioAtTick.
+- *SqrtPriceMath.getAmount0Delta*: token0 between two prices, `L · (√b − √a) / (√a · √b)`. It
+  divides in **two** rounded stages (first by √b, then by √a); one exact division can differ by
+  1 wei.
+- *SqrtPriceMath.getAmount1Delta*: token1 between two prices, `L · (√b − √a) / 2⁹⁶`.
+- *getNextSqrtPriceFromAmount0RoundingUp*: the price after adding or removing token0,
+  `L·√P / (L ± x·√P)`, rounded up. If `x·√P` overflows 256 bits, Solidity switches to
+  `L / (L/√P + x)`, which rounds differently. The port detects the overflow exactly as Solidity
+  does (unchecked multiply, then `product / x == √P`).
+- *getNextSqrtPriceFromAmount1RoundingDown*: the price after adding or removing token1,
+  `√P ± x/L`, rounded down.
+- *getNextSqrtPriceFromInput / FromOutput*: choose between the two above by direction. Rounding
+  always favours the pool: an input never moves the price past what it pays for, and an output
+  always moves it at least as far as needed.
+- *SwapMath.computeSwapStep*: one step inside one liquidity range. Exact input: take the fee
+  first (`amountRemaining · (1e6 − fee) / 1e6`), check whether that reaches the target price,
+  and otherwise compute the next price from the input. If the target was not reached, the whole
+  remainder counts as input + fee, so any rounding dust goes to LPs. Otherwise the fee is
+  `ceil(amountIn · fee / (1e6 − fee))`.
+- *TickBitmap.nextInitializedTickWithinOneWord*: the next initialized tick, but searched only
+  inside the current 256-bit word. If the word has none, the loop still takes a step to the word
+  boundary. Each extra step adds rounding, so an exact port needs the real word layout, not just a
+  sorted list of ticks. In the parity run, 3000 WETH into the 0.30% pool crossed 211 ticks in 221
+  steps: 9 stopped at an empty word boundary, and the last one ended inside a range.
+- *swap loop*: repeat {find next tick (clamped to MIN/MAX_TICK), cap at the price limit,
+  computeSwapStep, update remaining/calculated; if a tick boundary was reached, cross it and apply
+  ±liquidityNet, then set tick = tickNext (− 1 when moving down); else recompute the tick from
+  the price}.
+- *PoolTicksCounter (QuoterV2)*: counts set bitmap bits between tickBefore and tickAfter and
+  removes an endpoint that was not actually crossed. It uses truncating division, unlike
+  TickBitmap. It is ported only to compare with the quoter; `SwapResult.ticks_crossed` is the
+  real list.
+
+**Why this implementation.** It is a line-by-line port of the canonical sources (v3-core
+libraries + `UniswapV3Pool.swap`, v3-periphery `PoolTicksCounter`), not a re-derivation. The
+details that change results by 1 wei were kept: two-stage rounding, the overflow-branch formula,
+truncating signed division, word-boundary steps. Every `require` raises `SolidityRevert`.
+Missing tick data raises `TickDataOutOfRange`, so a result is exact or an error, never an
+estimate.
+
+**Verification.**
+- Offline (`tests/test_v3_swap_math.py`): TickMath against 90-digit Decimal values (error ≤ 1 +
+  5·10⁻²⁰ relative), tick ↔ price round trips, FullMath against `Fraction`, amount deltas
+  between exact floor and ceil, the overflow fallback branch, step invariants, the bitmap walk
+  against brute force, and single-range swaps against closed-form formulas.
+- On-chain (`research/parity/quoter_parity.py`, run `20261104T204637Z_3c7738a`): **30/30**
+  QuoterV2 `quoteExactInputSingle` answers match exactly (amountOut, sqrtPriceX96After,
+  initializedTicksCrossed) at block 520884405. That is 3 pools × 5 sizes × both directions,
+  from 0.0001 WETH (no crossing) to 232 initialized ticks crossed. The QuoterV2 address was
+  verified on-chain first (code, `factory()`, `WETH9()`). The vectors, with each pool's full
+  tick snapshot, are in `tests/vectors/v3_swaps.json` and are replayed offline by
+  `tests/test_v3_swap_parity.py`.
+
+**Assumptions.** The pools run the canonical v3-core 1.0.0 bytecode, which is what the quoter
+parity shows for these three pools. Fee-on-transfer and rebasing tokens are out of scope.
+The exact-output path is ported and unit-tested but **not** parity-tested against the quoter.
+
+**What can go wrong.**
+- Forks of v3 (PancakeSwap v3, Sushi v3, Algebra) change fees, tick spacing or the step
+  function. Re-run the parity before reusing the port on them.
+- Running out of fetched words raises an error by design; widen the window.
+- Python big-int math is slow (milliseconds per swap, more per crossing): fine for research, too
+  slow for scanning many sizes per block.
+- Parity at one block is strong evidence, not proof, for all states.
+
+**Production-grade.** Re-run the parity at several blocks and on every pool before use. Fuzz
+against the real contracts with Foundry using the JSON vectors. Port to Rust (e.g. `uniswap_v3_math`
+or a hand port) for speed. Add the exact-output and multi-hop quoter checks.
 
 ## Replay Engine
 

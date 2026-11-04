@@ -42,13 +42,15 @@ uv run python -m data.collectors.swaps && uv run python -m research.replay.run
 
 The first command fetches only the swap logs that are not cached yet. The second writes
 `research/results/<run_id>/`. Run the tests with `uv run pytest`. To re-verify the pool
-registry on-chain, run `uv run python -m data.pools.registry`.
+registry on-chain, run `uv run python -m data.pools.registry`. To re-check the exact v3 swap
+port against QuoterV2 at the pinned block, run `uv run python -m research.parity.quoter_parity`.
 
 ## Architecture
 
 - `data/pools`: verifies pool and token addresses on-chain → `configs/pools.yaml`.
-- `data/collectors`: fetches Swap logs, block headers and pool state, cached as Parquet under `data/cache/`.
-- `data/pricing`: exact `sqrtPriceX96` → USDC-per-WETH conversion.
+- `data/collectors`: fetches Swap logs, block headers, pool state and initialized-tick snapshots (tickBitmap + `ticks()`), cached as Parquet under `data/cache/`.
+- `data/pricing`: exact `sqrtPriceX96` → USDC-per-WETH conversion; exact integer port of the Uniswap v3 swap (`v3_swap.py`).
+- `research/parity`: QuoterV2 parity run → `tests/vectors/v3_swaps.json`.
 - `research/replay` + `research/analytics`: block-level gaps, single-tick sizing, gas, episodes, metrics and charts → `research/results/`.
 
 ## Status
@@ -60,8 +62,10 @@ registry on-chain, run `uv run python -m data.pools.registry`.
 | Done | sqrtPriceX96 pricing | `tests/test_v3_price.py`; matches `slot0()` exactly (`tests/test_v3_price_onchain.py`) |
 | Done | Replay engine: gaps, single-tick sizing, NodeInterface gas, episodes | `tests/test_replay_episodes.py`; run `20261103T134604Z_5a6404c` |
 | Done | Metrics, summary and charts | run `20261103T134604Z_5a6404c` |
+| Done | Initialized-tick snapshot collector | `tests/test_v3_swap_parity.py` (integration) |
+| Done | Exact Uniswap v3 swap port (multi-tick) | `tests/test_v3_swap_math.py`; 30/30 exact QuoterV2 matches, run `20261104T204637Z_3c7738a` |
 | In progress | LEARNING.md, updated after each component | `LEARNING.md` |
-| Planned | Multi-tick sizing (tickBitmap / QuoterV2) | none yet |
+| Planned | Use the exact swap port for multi-tick sizing in the replay | none yet |
 | Planned | Foundry arbitrage contract and fork tests (`contracts/`) | none yet |
 | Planned | Longer windows and more pools/DEXs | none yet |
 
@@ -84,6 +88,13 @@ registry on-chain, run `uv run python -m data.pools.registry`.
   - 1 USDC = 1 USD.
 
 ## Changelog
+
+### 2026-11-04
+- Exact Python port of the Uniswap v3 swap (`data/pricing/v3_swap.py`): TickMath,
+  SqrtPriceMath, SwapMath, FullMath, TickBitmap and the swap loop, integers only.
+- Initialized-tick snapshot collector (`data/collectors/ticks.py`), Parquet cache per bitmap word.
+- QuoterV2 parity at block 520884405: 30/30 exact-input quotes match exactly (3 pools × 5 sizes
+  × 2 directions). Vectors saved to `tests/vectors/v3_swaps.json` for later Foundry tests.
 
 ### 2026-11-03
 - Project scaffold (uv, Python 3.11+).

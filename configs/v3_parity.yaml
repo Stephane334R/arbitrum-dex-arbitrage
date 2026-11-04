@@ -1,0 +1,30 @@
+# QuoterV2 parity run for data/pricing/v3_swap.py (research/parity/quoter_parity.py).
+
+# Pinned block: every read (slot0, ticks, bitmap, QuoterV2 eth_call) sees the state *after*
+# this block. Same block as the pool registry verification (configs/pools.yaml).
+block: 520884405
+
+# QuoterV2 address from the task spec. Not trusted: the run checks it has code at `block`
+# and that its factory() and WETH9() match the verified registry.
+quoter_v2: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e'
+
+# tickBitmap words fetched on each side of the current tick. If a swap needs a word outside
+# the window, the run widens it by `widen_step` up to `max_words_each_side` (only the new
+# words are fetched).
+words_each_side: 2
+widen_step: 2
+max_words_each_side: 16
+
+# Exact-input sizes in whole tokens (strings, converted exactly with the token's decimals),
+# from dust to sizes large enough to cross initialized ticks. Each pool is quoted in both
+# directions: 3 pools x 5 sizes x 2 directions = 30 vectors.
+# `default` applies to every fee tier without its own entry. The 0.01% pool is much thinner
+# (measured at this block: 10 WETH in crosses 221 initialized ticks, ~9% price impact), so its
+# larger sizes would run past the fetched tick window.
+sizes:
+  default:
+    WETH: ['0.0001', '0.1', '10', '300', '3000']
+    USDC: ['0.5', '300', '30000', '1000000', '10000000']
+  100:
+    WETH: ['0.0001', '0.01', '0.3', '3', '10']
+    USDC: ['0.5', '30', '1000', '10000', '30000']
