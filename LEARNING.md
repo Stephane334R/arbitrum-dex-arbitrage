@@ -361,7 +361,7 @@ liquidity, ticks crossed, and integer rounding.
   price. It records whether liquidity differs, which Mint/Burn can cause.
 - *A same-window comparison.* The swap collector now accepts a fixed finalized `head` block, and
   `configs/replay.yaml` pins the first run's window. So the new run
-  (`20261104T211216Z_3bad7ce`) re-finds the same 9 episodes, and the two numbers differ only
+  (`20261104T211446Z_c57f8b8`) re-finds the same 9 episodes, and the two numbers differ only
   in the sizing.
 
 **Result.** The single-tick approximation gave $0.023422 gross over 9 episodes; the exact value

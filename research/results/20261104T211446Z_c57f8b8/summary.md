@@ -1,4 +1,4 @@
-# Replay 20261104T211216Z_3bad7ce
+# Replay 20261104T211446Z_c57f8b8
 
 **Headline.** Over 1.5 hours (20,000 blocks, 1,140 swaps), the WETH/USDC pools showed 9 episodes with a gap above the fee threshold, 56% of closed episodes lasted one block, and their exact multi-tick gross profit sums to $0.0233; none is profitable after gas (mean $0.013 per arbitrage).
 
@@ -72,5 +72,5 @@ Sizes differ more than profits because profit is flat near the optimum.
 
 ## Reproducibility
 
-- Git commit `3bad7ce7279d282bb7781981d6dfe8ad44f0d7f2` (with uncommitted changes); RPC provider `arb-mainnet.g.alchemy.com`; registry verified at block 520884405.
+- Git commit `c57f8b85d33d8a9adf9a2368714e6d72b349b6d5`; RPC provider `arb-mainnet.g.alchemy.com`; registry verified at block 520884405.
 - Full config in `config.json`; episodes in `episodes.parquet`.

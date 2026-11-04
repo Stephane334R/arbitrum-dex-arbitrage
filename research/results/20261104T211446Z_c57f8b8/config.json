@@ -1,5 +1,5 @@
 {
-  "run_id": "20261104T211216Z_3bad7ce",
+  "run_id": "20261104T211446Z_c57f8b8",
   "block_range": [
     520861829,
     520881828
@@ -69,8 +69,8 @@
   },
   "usdc_usd": 1.0,
   "rpc_provider": "arb-mainnet.g.alchemy.com",
-  "git_commit": "3bad7ce7279d282bb7781981d6dfe8ad44f0d7f2",
-  "git_dirty": true,
+  "git_commit": "c57f8b85d33d8a9adf9a2368714e6d72b349b6d5",
+  "git_dirty": false,
   "config": {
     "from_block": 520861829,
     "to_block": 520881828,

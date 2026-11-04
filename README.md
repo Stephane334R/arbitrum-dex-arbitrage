@@ -6,7 +6,7 @@ those gaps last?
 
 ## Latest result
 
-Run [`20261104T211216Z_3bad7ce`](research/results/20261104T211216Z_3bad7ce/summary.md):
+Run [`20261104T211446Z_c57f8b8`](research/results/20261104T211446Z_c57f8b8/summary.md):
 blocks 520,861,829 – 520,881,828, 2026-11-03 11:38:16 → 13:10:05 UTC. Pools: the 0.01%,
 0.05% and 0.30% fee tiers.
 
@@ -34,7 +34,7 @@ optimal trade crosses an initialized tick.
 
 Nine episodes in 1.5 hours is a small sample: treat the medians as indicative only.
 
-![Episode duration histogram](research/results/20261104T211216Z_3bad7ce/episode_durations.png)
+![Episode duration histogram](research/results/20261104T211446Z_c57f8b8/episode_durations.png)
 
 ## How to run
 
@@ -69,7 +69,7 @@ port against QuoterV2 at the pinned block, run `uv run python -m research.parity
 | Done | Initialized-tick snapshot collector | `tests/test_v3_swap_parity.py` (integration) |
 | Done | Exact Uniswap v3 swap port (multi-tick) | `tests/test_v3_swap_math.py`; 30/30 exact QuoterV2 matches, run `20261104T204637Z_3c7738a` |
 | In progress | LEARNING.md, updated after each component | `LEARNING.md` |
-| Done | Exact multi-tick sizing per episode (peak block), single-tick kept for comparison | `tests/test_replay_multitick.py`; run `20261104T211216Z_3bad7ce` |
+| Done | Exact multi-tick sizing per episode (peak block), single-tick kept for comparison | `tests/test_replay_multitick.py`; run `20261104T211446Z_c57f8b8` |
 | Planned | Foundry arbitrage contract and fork tests (`contracts/`) | none yet |
 | Planned | Longer windows and more pools/DEXs | none yet |
 
@@ -97,7 +97,7 @@ port against QuoterV2 at the pinned block, run `uv run python -m research.parity
 ### 2026-11-04
 - Replay: exact multi-tick sizing and gross profit at each episode's peak block, using the
   swap port on on-chain tick snapshots; single-tick numbers kept as comparison columns.
-  Run `20261104T211216Z_3bad7ce`: single-tick overstated gross by 0.34%.
+  Run `20261104T211446Z_c57f8b8`: single-tick overstated gross by 0.34%.
 - Swap collector: `head` can be a fixed (finalized) block number, to re-collect a past window;
   `configs/replay.yaml` pins the first run's window.
 - Exact Python port of the Uniswap v3 swap (`data/pricing/v3_swap.py`): TickMath,
