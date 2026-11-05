@@ -49,6 +49,14 @@ The first command fetches only the swap logs that are not cached yet. The second
 registry on-chain, run `uv run python -m data.pools.registry`. To re-check the exact v3 swap
 port against QuoterV2 at the pinned block, run `uv run python -m research.parity.quoter_parity`.
 
+Contracts (Foundry; see `contracts/README.md` for setup):
+
+```bash
+git submodule update --init --recursive
+ln -s ../.env contracts/.env   # Foundry reads ARBITRUM_RPC_URL from contracts/.env
+cd contracts && forge test -vv && forge test --gas-report
+```
+
 ## Architecture
 
 - `data/pools`: verifies pool and token addresses on-chain → `configs/pools.yaml`.
@@ -56,6 +64,7 @@ port against QuoterV2 at the pinned block, run `uv run python -m research.parity
 - `data/pricing`: exact `sqrtPriceX96` → USDC-per-WETH conversion; exact integer port of the Uniswap v3 swap (`v3_swap.py`).
 - `research/parity`: QuoterV2 parity run → `tests/vectors/v3_swaps.json`.
 - `research/replay` + `research/analytics`: block-level gaps, single-tick and exact multi-tick sizing, gas, episodes, metrics and charts → `research/results/`.
+- `contracts/`: Foundry project. `V3ArbExecutor` (atomic two-pool v3 arbitrage through nested swap callbacks, factory-verified pools, onlyOwner, no funds held) and fork tests at block 520884405.
 
 ## Status
 
@@ -70,7 +79,7 @@ port against QuoterV2 at the pinned block, run `uv run python -m research.parity
 | Done | Exact Uniswap v3 swap port (multi-tick) | `tests/test_v3_swap_math.py`; 30/30 exact QuoterV2 matches, run `20261104T204637Z_3c7738a` |
 | In progress | LEARNING.md, updated after each component | `LEARNING.md` |
 | Done | Exact multi-tick sizing per episode (peak block), single-tick kept for comparison | `tests/test_replay_multitick.py`; run `20261104T211446Z_c57f8b8` |
-| Planned | Foundry arbitrage contract and fork tests (`contracts/`) | none yet |
+| Done | Foundry arbitrage contract and fork tests (`contracts/`) | `forge test`: 18/18 pass (SYNTHETIC gap scenarios, callback auth, revert paths, 256-run fuzz, 30/30 on-chain swap parity with the Python vectors) |
 | Planned | Longer windows and more pools/DEXs | none yet |
 
 ## Limitations
@@ -83,7 +92,10 @@ port against QuoterV2 at the pinned block, run `uv run python -m research.parity
   than a dedicated arbitrage contract, so it likely overstates gas. It is priced at each
   episode's peak-block base fee. The L1 data price was 0 at the probe block because of
   Arbitrum's L1 pricing surplus; this was measured, not assumed. Gas is probed once per run.
-- **No on-chain execution yet.** This is research only: no transactions, no keys.
+- **No on-chain execution.** The executor is tested on a local fork only. No transactions are
+  sent and the repo holds no keys. The fork profit (519.94 USDC) is from a SYNTHETIC gap that a
+  test account created with a 100 WETH dump; it is not a real opportunity. Forge gas figures are
+  L2 execution only (no L1 data fee).
 - **Uniswap v3 pools only**: the WETH/USDC 0.01%, 0.05% and 0.30% tiers.
 - Other simplifications:
   - The window ends at the *finalized* block.
@@ -93,6 +105,17 @@ port against QuoterV2 at the pinned block, run `uv run python -m research.parity
   - 1 USDC = 1 USD.
 
 ## Changelog
+
+### 2026-11-05
+- Foundry project in `contracts/` (forge-std v1.17.0 submodule, solc 0.8.28, Cancun). The fork
+  block (520884405) is pinned in `foundry.toml`; the RPC URL comes from `.env`.
+- `V3ArbExecutor`: atomic two-pool arbitrage through nested `uniswapV3SwapCallback`s. Pools are
+  verified with `factory.getPool`, the callback is single-use and authorises only the expected
+  pool, profit goes to the owner inside the trade, owner-only rescue.
+- Fork tests: SYNTHETIC gap → 519.940023 USDC gross on 50,000 USDC; `minProfit` and no-gap
+  reverts; non-pool / fake-pool callbacks rejected; 256-run fuzz with no loss without revert;
+  all 30 Python swap vectors reproduced exactly by real swaps on the fork. A SYNTHETIC
+  `execute` costs 340,692 L2 gas.
 
 ### 2026-11-04
 - Replay: exact multi-tick sizing and gross profit at each episode's peak block, using the

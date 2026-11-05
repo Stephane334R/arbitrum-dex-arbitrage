@@ -12,3 +12,8 @@ data/cache/
 
 # OS
 .DS_Store
+
+# Foundry build output
+contracts/out/
+contracts/cache/
+contracts/broadcast/

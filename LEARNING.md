@@ -420,3 +420,145 @@ under a second show as 0 s.
 interactive dashboard. Store metrics in a table to compare across runs.
 
 ## Contracts
+
+### `contracts/src/V3ArbExecutor.sol` + fork tests (`contracts/test/`)
+
+**What it does.** `execute(poolA, poolB, zeroForOne, amountIn, minProfit)` runs a two-pool
+round trip on a Uniswap v3 pair in one transaction. It sells exactly `amountIn` on poolA,
+sells everything poolA returned on poolB in the opposite direction, repays both pools inside
+their swap callbacks, and keeps the difference. The profit is in poolA's input token and goes
+straight to the owner. It reverts if the profit is below `minProfit`.
+
+Callback flow (nested flash swaps, so no capital is needed):
+
+```
+owner ─ execute()
+         ├─ verify poolA, poolB via factory.getPool(token0, token1, fee); same pair; distinct
+         ├─ balanceBefore = tokenIn.balanceOf(this)
+         ├─ _expectedPool = poolA
+         └─ poolA.swap(this, zeroForOne, +amountIn, no limit, data{stage A})
+              ├─ poolA → this: tokenOut (received)
+              └─ poolA → uniswapV3SwapCallback (stage A)
+                   ├─ msg.sender == _expectedPool? then clear it (single use)
+                   ├─ _expectedPool = poolB
+                   ├─ poolB.swap(this, !zeroForOne, +received, no limit, data{stage B})
+                   │    ├─ poolB → this: tokenIn
+                   │    └─ poolB → uniswapV3SwapCallback (stage B)
+                   │         ├─ msg.sender == _expectedPool? clear it
+                   │         ├─ owed == received? (else PartialFill)
+                   │         └─ pay poolB `owed` tokenOut
+                   ├─ tokenIn balance >= owed to poolA? (else CannotRepay)
+                   └─ pay poolA `owed` tokenIn
+         ├─ profit = balanceAfter - balanceBefore; >= minProfit? (else InsufficientProfit)
+         └─ transfer profit to owner; emit ArbExecuted
+```
+
+Each pool sends its output before calling the callback and checks its own balance after the
+callback returns ('IIA' if underpaid). So poolB's output is already in hand when poolA must be
+repaid. Each pool is locked during its own swap, but nesting different pools is allowed.
+
+Revert paths, in the order they can trigger:
+
+| Where | Revert | Cause |
+|---|---|---|
+| execute | `NotOwner()` | caller is not `owner` |
+| execute | `Reentrancy()` | execute re-entered (transient `_locked`) |
+| execute | `ZeroAmount()` | `amountIn == 0` |
+| execute | `AmountTooLarge(amountIn)` | `amountIn > type(int256).max` (swap takes `int256`) |
+| execute | `SamePool()` | `poolA == poolB` |
+| execute | `PoolNotFromFactory(pool)` | no code at the address, or `factory.getPool(token0, token1, fee) != pool` |
+| execute | raw revert from `pool.token0()` etc. | a contract with no such getters (e.g. a fallback that reverts) |
+| execute | `PairMismatch(poolA, poolB)` | factory pools of different pairs |
+| callback | `UnauthorizedCallback(caller)` | caller is not the one pool authorised right now (also when nothing is in flight) |
+| callback | `InvalidDeltas(d0, d1)` | sign pattern does not match the swap direction |
+| poolB | `'AS'` | poolA returned 0 output (dust `amountIn`), so poolB is asked to swap 0 |
+| callback B | `PartialFill(owed, expected)` | poolB stopped early (price limit / out of liquidity); tokenOut would be stranded |
+| callback A | `CannotRepay(balance, owed)` | poolB's output < what poolA is owed: the route loses money at this size |
+| pool | `'IIA'` | a pool was underpaid (cannot happen once the checks above pass; it backs them up) |
+| execute | `UnauthorizedCallback(pool)` | swap returned without calling back (not a genuine v3 pool) |
+| execute | `Loss(before, after)` | tokenIn balance went down. Only reachable if pre-existing balance helped repay |
+| execute | `InsufficientProfit(profit, minProfit)` | the gain is below the caller's threshold |
+| any transfer | `TransferFailed(token, to, amount)` | token returned false, reverted, or has no code |
+| rescue* | `NotOwner()` / `TransferFailed` | as above |
+
+Any revert undoes the whole transaction, including both swaps. So the contract either
+gains at least `minProfit` or nothing happens (apart from gas).
+
+**Why this implementation.**
+- *Nested flash swaps instead of pulling funds from the owner.* The pool sends its output
+  before asking to be paid, so the arbitrage needs no capital and no approvals. The contract
+  never holds a balance across transactions.
+- *Two layers of callback authentication.* First, `execute` checks each pool with
+  `factory.getPool` against the pool's own `token0/token1/fee`. Second, only that pool may
+  call the callback, and only once (`_expectedPool` is cleared on entry). Even a genuine
+  factory pool cannot call the callback unless it was authorised for this step. `data` is
+  trusted only after the `msg.sender` check, because a genuine pool forwards it unchanged.
+- *Transient storage (EIP-1153)* for `_expectedPool` and `_locked`. They reset at the end
+  of every transaction, so no stale authorisation can survive a revert, and they cost no
+  storage gas. Arbitrum One supports Cancun opcodes (ArbOS 20+), and the fork tests run them.
+- *Profit measured as a balance difference* of the input token, not computed from the deltas.
+  So it catches anything the deltas would miss.
+- *Owner and factory are immutable.* There is no ownership transfer, which means less to get wrong.
+
+**Assumptions.**
+- Both pools are canonical Uniswap v3 pools from `factory` (0x1F98…F984, verified on-chain).
+  Standard ERC-20s: no fee-on-transfer, no rebasing, no transfer hooks.
+- The owner chooses `amountIn` and the direction off-chain (e.g. with `research/replay`'s
+  exact sizing). The contract does not optimise size.
+- `minProfit` is the only slippage guard. Set it to cover gas, or a profitable-but-below-gas
+  trade will still go through.
+- Swaps use no price limit (`MIN_SQRT_RATIO+1` / `MAX_SQRT_RATIO-1`). The protection is
+  `minProfit`, not per-hop limits.
+
+**Tests (fork of Arbitrum One at block 520884405, pinned in `foundry.toml`).**
+- SYNTHETIC scenarios: a funded test account (`deal`) dumps 100 WETH into the 0.30% pool,
+  which lowers its WETH price by about 1.5%. That opens a gap that does not exist at the
+  pinned block. `execute(0.30%, 0.05%, USDC→WETH, 50,000 USDC)` then makes
+  **519.940023 USDC** (gross, before gas). The figure only demonstrates the mechanics; it says
+  nothing about real opportunity. Same setup with `minProfit = achievable + 1` reverts with
+  `InsufficientProfit`. Without the dump, the same trade reverts with `CannotRepay`: at the
+  pinned block the pools are within fees of each other.
+- Callback from non-pool: an attacker EOA and a genuine but unauthorised factory pool both get
+  `UnauthorizedCallback`, even when the executor holds stray funds. A fake contract that copies
+  the 0.05% pool's `token0/token1/fee` gets `PoolNotFromFactory`.
+- Other revert paths: not owner, zero/oversized amount, same pool, EOA as pool, pair mismatch
+  (genuine WETH/USDC.e pool), zero owner. Rescue of tokens and ETH, owner-only.
+- Fuzz (256 runs, fixed seed): dump 0–300 WETH (SYNTHETIC), either direction, `amountIn`
+  1–1,000,000 USDC or 0.001–500 WETH, with `minProfit = 0`. The test asserts: either a
+  revert, or the owner gains exactly `profit` >= 0 and the executor ends with zero of both
+  tokens. On the same distribution about 25% of inputs succeed (all USDC-in), measured with
+  a 200-draw sweep, so both branches are exercised.
+- Parity: each of the 30 vectors in `tests/vectors/v3_swaps.json` is executed as a real
+  swap on the forked pool. Amount out, amount in used, `sqrtPriceX96` after and tick after
+  all match the Python port exactly, and the amount out also matches QuoterV2. A separate
+  test checks that the vectors' block equals `foundry.toml`'s `fork_block_number`.
+- Gas (`forge test --gas-report`): the SYNTHETIC successful `execute` costs 340,692 L2 gas.
+  Over all calls it ranges from 22,839 (early revert) to 963,430 (large fuzz sizes crossing
+  many ticks). Forge measures L2 execution gas only; Arbitrum's L1 data fee is not included.
+
+**What can go wrong.**
+- Fork gotchas found while writing the tests:
+  - `block.number` on an Arbitrum fork is the **L1** block number (26334542 here), not the L2
+    block, so it cannot be used to check the fork block.
+  - `makeAddr("owner")` and `makeAddr("attacker")` already have contract code on Arbitrum One.
+    One of them swallowed the rescued ETH. Tests now use unique labels and assert `code.length == 0`.
+  - Bridged USDC.e's on-chain `symbol()` is `"USDC"`, not `"USDC.e"`.
+- Sending the transaction publicly invites front-running and sandwiching: someone closes the
+  gap first and the trade reverts (gas lost), or worse if `minProfit` is too low.
+- Gas is not checked on-chain: a trade can be "profitable" in tokens and lose money net of gas.
+- A pool whose token has transfer hooks could re-enter. The `_locked` flag and the single-use
+  callback authorisation limit this, but non-standard tokens are out of scope.
+- `deal` writes balances directly. USDC's FiatToken storage layout made this work here, but it
+  is a test-only shortcut.
+
+**Production-grade.**
+- Private submission (e.g. a sequencer-side bundle/relay if available on Arbitrum) and
+  `minProfit` derived from the gas price × gas estimate plus a margin.
+- A deadline / max block number argument, so a delayed transaction cannot land stale.
+- Multi-hop and multi-DEX routes (v3 forks with a different callback name, v2 pairs). Flash
+  loans for non-cyclic routes.
+- Two-step ownership and an executor allow-list, so a hot key can trade but cannot rescue
+  funds to an arbitrary address.
+- Fork tests at many blocks against real historical gaps from `episodes.parquet`, not only
+  synthetic ones. Invariant tests with a handler that interleaves random swaps and executes.
+- An independent audit, and Slither/forge lint clean.

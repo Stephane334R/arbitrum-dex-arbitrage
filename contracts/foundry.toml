@@ -1,0 +1,32 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+solc_version = "0.8.28"
+# Cancun: the executor uses transient storage (EIP-1153), live on Arbitrum One since ArbOS 20.
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 10_000
+
+# Every test runs on an Arbitrum One fork pinned at this block (state AFTER the block).
+# Same block as configs/pools.yaml (registry verification) and tests/vectors/v3_swaps.json
+# (QuoterV2 parity vectors); test/V3SwapParity.t.sol asserts the two agree.
+# The URL comes from ARBITRUM_RPC_URL in the repo-root .env (git-ignored), never from here.
+eth_rpc_url = "arbitrum"
+fork_block_number = 520884405
+
+# Read-only access for the parity test (vectors) and for the fork-block consistency check.
+fs_permissions = [
+    { access = "read", path = "../tests/vectors/v3_swaps.json" },
+    { access = "read", path = "./foundry.toml" },
+]
+
+[rpc_endpoints]
+arbitrum = "${ARBITRUM_RPC_URL}"
+
+[fuzz]
+runs = 256
+# Fixed seed: the fuzz inputs are reproducible from run to run.
+seed = "0x2a"
