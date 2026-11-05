@@ -83,7 +83,7 @@ interpreter (e.g. 3.14.0a5) crashes on the locked wheels.
 | Done | Exact Uniswap v3 swap port (multi-tick) | `tests/test_v3_swap_math.py`; 30/30 exact QuoterV2 matches, run `20261104T204637Z_3c7738a` |
 | In progress | LEARNING.md, updated after each component | `LEARNING.md` |
 | Done | Exact multi-tick sizing per episode (peak block), single-tick kept for comparison | `tests/test_replay_multitick.py`; run `20261104T211446Z_c57f8b8` |
-| Done | Foundry arbitrage contract and fork tests (`contracts/`) | `forge test`: 18/18 pass (SYNTHETIC gap scenarios, callback auth, revert paths, 256-run fuzz, 30/30 on-chain swap parity with the Python vectors) |
+| Done | Foundry arbitrage contract and fork tests (`contracts/`) | `forge test`: 18/18 pass (SYNTHETIC gap scenarios, callback auth, revert paths, 256-run fuzz, 30/30 on-chain swap parity with the Python vectors); run `20261105T190351Z_94c0dfb` |
 | Planned | Longer windows and more pools/DEXs | none yet |
 
 ## Limitations
@@ -119,7 +119,10 @@ interpreter (e.g. 3.14.0a5) crashes on the locked wheels.
 - Fork tests: SYNTHETIC gap → 519.940023 USDC gross on 50,000 USDC; `minProfit` and no-gap
   reverts; non-pool / fake-pool callbacks rejected; 256-run fuzz with no loss without revert;
   all 30 Python swap vectors reproduced exactly by real swaps on the fork. A SYNTHETIC
-  `execute` costs 340,692 L2 gas.
+  `execute` costs 340,692 L2 gas. Saved as run `20261105T190351Z_94c0dfb`
+  (`research/forktests/run.py`, from a clean commit).
+- Python environment: `.venv` had been built on CPython 3.14.0a5 (alpha), which crashed on the
+  locked wheels; rebuilt on 3.14.10. 596/596 Python tests pass.
 
 ### 2026-11-04
 - Replay: exact multi-tick sizing and gross profit at each episode's peak block, using the

@@ -1,0 +1,57 @@
+{
+  "description": "Foundry fork tests of contracts/src/V3ArbExecutor.sol and on-chain swap parity",
+  "run_id": "20261105T190351Z_94c0dfb",
+  "chain_id": 42161,
+  "fork": {
+    "fork_block_number": 520884405,
+    "rpc_alias": "arbitrum",
+    "solc_version": "0.8.28",
+    "evm_version": "cancun",
+    "optimizer_runs": 10000,
+    "fuzz": {
+      "runs": 256,
+      "seed": "0x2a"
+    }
+  },
+  "state_semantics": "fork state after `fork_block_number`",
+  "pools": {
+    "factory": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+    "poolA (0.30%)": "0xc473e2aEE3441BF9240Be85eb122aBB059A3B57c",
+    "poolB (0.05%)": "0xC6962004f452bE9203591991D15f6b388e09E8D0",
+    "also used by parity (0.01%)": "0x6f38e884725a116C9C7fBF208e79FE8828a2595F",
+    "source": "configs/pools.yaml; re-checked with factory.getPool in contracts/test/utils/ForkBase.sol setUp"
+  },
+  "synthetic_scenario": {
+    "label": "SYNTHETIC",
+    "dump": "100 WETH sold into the 0.30% pool by a deal()-funded test account",
+    "execute": "poolA=0.30%, poolB=0.05%, zeroForOne=false (USDC in), amountIn=50,000 USDC, minProfit=1 USDC"
+  },
+  "synthetic_profit_usdc": "519.940023",
+  "gas": {
+    "unit": "L2 execution gas as measured by forge; excludes Arbitrum L1 data fee",
+    "synthetic_execute": {
+      "calls": 1,
+      "min": 340692,
+      "mean": 340692,
+      "median": 340692,
+      "max": 340692
+    },
+    "execute_all_calls": {
+      "calls": 269,
+      "min": 22839,
+      "mean": 621504,
+      "median": 704361,
+      "max": 963430
+    }
+  },
+  "tests_passed": 18,
+  "tests_total": 18,
+  "vectors_file": "tests/vectors/v3_swaps.json",
+  "toolchain": {
+    "forge": "forge Version: 1.9.0",
+    "forge_std_commit": "f3dae6e6ee381f25eb6a246f7da9b85c91a68219"
+  },
+  "rpc_provider": "arb-mainnet.g.alchemy.com",
+  "git_commit": "94c0dfb6a469764b50b1c9bf838cd8c6e7d7a703",
+  "git_dirty": false
+}

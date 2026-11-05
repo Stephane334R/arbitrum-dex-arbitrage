@@ -1,0 +1,187 @@
+[
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "testFuzz_neverLosesWithoutReverting(uint256,bool,uint256)",
+    "status": "Success",
+    "reason": null,
+    "kind": "fuzz",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "runs": 256,
+    "mean_gas": 1149316,
+    "median_gas": 1277137,
+    "counterexample": null
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_SYNTHETIC_gapAfterLargeSwap_executeProfits()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [
+      "SYNTHETIC profit (USDC): 519.940023"
+    ],
+    "gas": 885004
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_SYNTHETIC_revertsWhenMinProfitAboveGain()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 1098707
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_amountTooLarge_reverts()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 34244
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_callbackFromNonPool_cannotDrainHeldFunds()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 294996
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_callbackFromNonPool_reverts()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 60419
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_constructor_rejectsZeroAddresses()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 173355
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_eoaAsPool_reverts()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 39188
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_fakePoolNotFromFactory_reverts()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 357901
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_noGap_revertsCannotRepay()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 279800
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_onlyOwner_execute()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 33428
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_pairMismatch_reverts()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 76336
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_rescueETH_ownerOnly()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 64709
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_rescueToken_ownerOnly()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 370968
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_samePool_reverts()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 33972
+  },
+  {
+    "suite": "test/V3ArbExecutor.t.sol:V3ArbExecutorTest",
+    "test": "test_zeroAmount_reverts()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 33755
+  },
+  {
+    "suite": "test/V3SwapParity.t.sol:V3SwapParityTest",
+    "test": "test_onChainSwapsMatchPythonVectors()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 58732726
+  },
+  {
+    "suite": "test/V3SwapParity.t.sol:V3SwapParityTest",
+    "test": "test_vectorsAreFromThePinnedBlock()",
+    "status": "Success",
+    "reason": null,
+    "kind": "unit",
+    "fork_block_number": 520884405,
+    "decoded_logs": [],
+    "gas": 2544868
+  }
+]

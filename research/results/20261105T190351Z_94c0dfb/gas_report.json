@@ -1,0 +1,85 @@
+[
+  {
+    "contract": "src/V3ArbExecutor.sol:V3ArbExecutor",
+    "deployment": {
+      "gas": 1291286,
+      "size": 6100
+    },
+    "functions": {
+      "execute(address,address,bool,uint256,uint256)": {
+        "calls": 269,
+        "min": 22839,
+        "mean": 621504,
+        "median": 704361,
+        "max": 963430
+      },
+      "rescueETH(address,uint256)": {
+        "calls": 2,
+        "min": 22022,
+        "mean": 26391,
+        "median": 26391,
+        "max": 30761
+      },
+      "rescueToken(address,address,uint256)": {
+        "calls": 2,
+        "min": 22487,
+        "mean": 43831,
+        "median": 43831,
+        "max": 65175
+      },
+      "uniswapV3SwapCallback(int256,int256,bytes)": {
+        "calls": 3,
+        "min": 23592,
+        "mean": 23608,
+        "median": 23592,
+        "max": 23640
+      }
+    }
+  },
+  {
+    "contract": "test/V3ArbExecutor.t.sol:FakePool",
+    "deployment": {
+      "gas": 238781,
+      "size": 1158
+    },
+    "functions": {
+      "fee()": {
+        "calls": 2,
+        "min": 247,
+        "mean": 247,
+        "median": 247,
+        "max": 247
+      },
+      "token0()": {
+        "calls": 2,
+        "min": 170,
+        "mean": 170,
+        "median": 170,
+        "max": 170
+      },
+      "token1()": {
+        "calls": 2,
+        "min": 214,
+        "mean": 214,
+        "median": 214,
+        "max": 214
+      }
+    }
+  },
+  {
+    "contract": "test/utils/ForkBase.sol:PoolSwapper",
+    "deployment": {
+      "gas": 409204,
+      "size": 1686
+    },
+    "functions": {
+      "swapExactIn(address,bool,uint256)": {
+        "calls": 282,
+        "min": 103256,
+        "mean": 302681,
+        "median": 164038,
+        "max": 9308830
+      }
+    }
+  }
+]
