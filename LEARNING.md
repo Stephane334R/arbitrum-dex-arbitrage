@@ -562,3 +562,36 @@ gains at least `minProfit` or nothing happens (apart from gas).
 - Fork tests at many blocks against real historical gaps from `episodes.parquet`, not only
   synthetic ones. Invariant tests with a handler that interleaves random swaps and executes.
 - An independent audit, and Slither/forge lint clean.
+
+### `research/forktests/run.py`: fork-test results with their config
+
+**What it does.** Runs the Foundry suite three times on the pinned fork: statuses and logs,
+the whole-suite gas report, and the gas of the single SYNTHETIC `execute`. It saves
+`config.json`, `tests.json`, `gas_report.json` and `summary.md` under
+`research/results/<run_id>/`.
+
+**Why.** Forge prints results to a terminal and keeps nothing. The repo rule is that every
+result is saved with its config and git commit. Every number in the summary is parsed from
+forge's JSON, including the SYNTHETIC profit, which the test emits as a log line, so nothing is
+retyped by hand. The parsing is pure functions, unit-tested in `tests/test_forktests_run.py`
+without forge or RPC.
+
+**Assumptions.** forge 1.9's `--json` layout (`test_results`, `kind.Unit/Fuzz`,
+`decoded_logs` filled with `-vv`). `--gas-report --json` gives a list of
+`{contract, functions{sig: {calls,min,mean,median,max}}}`. The profit log line format is fixed
+by `contracts/test/V3ArbExecutor.t.sol`.
+
+**What can go wrong.**
+- A forge upgrade can change the JSON layout. The parser then raises (`KeyError`/`ValueError`)
+  instead of saving wrong numbers.
+- Forge's fork RPC cache (`~/.foundry/cache/rpc/`) makes reruns fast. A cold cache needs an
+  archive RPC and takes minutes.
+- Environment: the Python suite crashed on import (`yaml` segfault, pyarrow undefined symbol)
+  because `.venv` had been created with CPython **3.14.0a5**, an alpha whose ABI differs from
+  the 3.14 wheels in `uv.lock`. The fix was to update uv and install the final 3.14 (3.14.10),
+  then rebuild with `uv venv --clear && uv sync --locked`. `.python-version` says `3.14`, so
+  any 3.14.x final release works; pre-releases don't.
+
+**Production-grade.** Run in CI on every change to `contracts/`, with the forge and solc
+versions pinned in the CI image. Compare gas against the previous run and fail on regressions.
+Add fork tests at the peak block of real historical episodes from `episodes.parquet`.

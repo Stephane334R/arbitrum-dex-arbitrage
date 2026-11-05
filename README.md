@@ -57,6 +57,10 @@ ln -s ../.env contracts/.env   # Foundry reads ARBITRUM_RPC_URL from contracts/.
 cd contracts && forge test -vv && forge test --gas-report
 ```
 
+To save a fork-test run (config, per-test results, gas) under `research/results/<run_id>/`:
+`uv run python -m research.forktests.run`. Python must be a final 3.14.x release: a pre-release
+interpreter (e.g. 3.14.0a5) crashes on the locked wheels.
+
 ## Architecture
 
 - `data/pools`: verifies pool and token addresses on-chain → `configs/pools.yaml`.
