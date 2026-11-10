@@ -6,46 +6,61 @@ those gaps last?
 
 ## Latest result
 
-Run [`20261104T211446Z_c57f8b8`](research/results/20261104T211446Z_c57f8b8/summary.md):
-blocks 520,861,829 – 520,881,828, 2026-11-03 11:38:16 → 13:10:05 UTC. Pools: the 0.01%,
-0.05% and 0.30% fee tiers.
+Run [`20261109T213505Z_a42a515`](research/results/20261109T213505Z_a42a515/summary.md): 24 hours, blocks 520,575,466 – 520,881,828
+(2026-11-02 13:10:06 → 2026-11-03 13:10:05 UTC). Pools: Uniswap v3 WETH/USDC 0.01%, 0.05%, 0.30%
+and SushiSwap v3 WETH/USDC 0.05%.
 
-**Headline.** Over 1.5 hours (20,000 blocks, 1,140 swaps), the WETH/USDC pools showed 9
-episodes with a gap above the fee threshold. 56% of closed episodes lasted one block. Their
-exact multi-tick gross profit sums to $0.0233, and none is profitable after gas (mean $0.013
-per arbitrage). The single-tick approximation used in the first run
-([`20261103T134604Z_5a6404c`](research/results/20261103T134604Z_5a6404c/summary.md)) gave
-$0.0234: it overstated gross profit by $0.00008 (0.34%), almost all from the one episode whose
-optimal trade crosses an initialized tick.
+**Headline.**
+- The block-level replay found 312 episodes in 24 hours with a gap above the fee threshold.
+  Their exact multi-tick gross sums to **$0.72**. 4 are net-positive after gas, together
+  **$0.02**.
+- Replaying after every transaction finds **542** episodes. The block level misses 226 (42%),
+  which open and close inside a single block and hold 57% of the gross.
+- **76%** of gaps are closed by the very next transaction on the pair's pools.
+- Almost none of the closing transactions trades both pools of the pair: **1 of 542**. 36%
+  also swap in other venues. 64% touch only one of our pools: a directional trade, or a
+  CEX-DEX arbitrage whose other leg is off-chain.
+- Concentration sits behind contracts, not senders: the top 5 `to` contracts close 76% of the
+  gaps, against 26% for the top 5 senders.
 
-| Metric | Value |
-|---|---|
-| Blocks (N) | 20,000 (520861829..520881828) |
-| Hours (H) | 1.53 |
-| Swaps (S) | 1,140 |
-| Gross episodes (G): gap > sum of fees | 9 (all on the 0.01%/0.05% pair) |
-| Net-positive episodes (M) | 0 |
-| Closed within 1 block (P) | 55.6% of closed episodes |
-| Median / p90 duration (blocks) | 1 / 10 |
-| Median / p90 duration (seconds) | 0 / 2 |
-| Total gross profit, exact multi-tick (USD) | $0.0233 |
-| Total gross profit, single-tick approximation (USD) | $0.0234 |
-| Total net profit, net-positive episodes only (USD) | $0.00 |
+| Metric | Block-level | Transaction-level |
+|---|---|---|
+| Episodes (gap > sum of fees) | 312 | 542 |
+| Net-positive at gas ×0.5 / ×1 / ×2 | 24 / 4 / 0 | 62 / 23 / 8 |
+| Gross profit, exact multi-tick (USD) | $0.7224 | $2.1534 |
+| Net profit at gas ×1, net-positive episodes only (USD) | $0.0204 | $0.6046 |
+| Opened and closed inside one block | invisible | 226 (41.7%) |
+| Median duration | 1 block | 1 transaction on the pair's pools |
+| Replayed state vs archive `slot0()`/`liquidity()` | n/a | 0 / 492 mismatches |
 
-Nine episodes in 1.5 hours is a small sample: treat the medians as indicative only.
+Gas per arbitrage is **$0.016–0.018**: 340,692 L2 gas for the executor's `execute()` (forge,
+SYNTHETIC trade), plus 22.5k intrinsic, plus 0 L1 data gas. The L1 component was measured at
+each of the 222 peak blocks.
 
-![Episode duration histogram](research/results/20261104T211446Z_c57f8b8/episode_durations.png)
+Read the transaction-level numbers as *what existed*, not what was capturable. Each one
+assumes our transaction was ordered right after the one that opened the gap. Episodes on pairs
+with the Sushi pool (173 of 312 at block level) are real price gaps, but `V3ArbExecutor`
+cannot trade them as deployed: it trusts only the Uniswap factory.
+
+![Top closing contracts](research/results/20261109T213505Z_a42a515/closers_top_contracts.png)
+
+Earlier runs:
+- [`20261104T211446Z_c57f8b8`](research/results/20261104T211446Z_c57f8b8/summary.md): 1.5 h,
+  9 episodes, exact multi-tick vs single-tick.
+- [`20261103T134604Z_5a6404c`](research/results/20261103T134604Z_5a6404c/summary.md): the first
+  run, single-tick only.
 
 ## How to run
 
 ```bash
 uv sync
 cp .env.example .env   # set ARBITRUM_RPC_URL (archive-capable RPC, e.g. Alchemy)
-uv run python -m data.collectors.swaps && uv run python -m research.replay.run
+uv run python -m data.collectors.pool_logs 520575466 520881828   # Swap + Mint/Burn, one pass (24 h: ~1h45 on Alchemy Free)
+uv run python -m research.replay.run
 ```
 
-The first command fetches only the swap logs that are not cached yet. The second writes
-`research/results/<run_id>/`. Run the tests with `uv run pytest`. To re-verify the pool
+The collector fetches only the logs that are not cached yet. The window is pinned in
+`configs/replay.yaml`. The replay writes `research/results/<run_id>/`. Run the tests with `uv run pytest`. To re-verify the pool
 registry on-chain, run `uv run python -m data.pools.registry`. To re-check the exact v3 swap
 port against QuoterV2 at the pinned block, run `uv run python -m research.parity.quoter_parity`.
 
@@ -64,10 +79,10 @@ interpreter (e.g. 3.14.0a5) crashes on the locked wheels.
 ## Architecture
 
 - `data/pools`: verifies pool and token addresses on-chain → `configs/pools.yaml`.
-- `data/collectors`: fetches Swap logs, block headers, pool state and initialized-tick snapshots (tickBitmap + `ticks()`), cached as Parquet under `data/cache/`.
+- `data/collectors`: fetches Swap and Mint/Burn logs, transaction indices, block headers, pool state and initialized-tick snapshots (tickBitmap + `ticks()`), cached as Parquet under `data/cache/`.
 - `data/pricing`: exact `sqrtPriceX96` → USDC-per-WETH conversion; exact integer port of the Uniswap v3 swap (`v3_swap.py`).
 - `research/parity`: QuoterV2 parity run → `tests/vectors/v3_swaps.json`.
-- `research/replay` + `research/analytics`: block-level gaps, single-tick and exact multi-tick sizing, gas, episodes, metrics and charts → `research/results/`.
+- `research/replay` + `research/analytics`: block-level gaps, single-tick and exact multi-tick sizing, gas (executor forge gas + per-block NodeInterface intrinsic/L1), sensitivity, episodes, metrics and charts → `research/results/`. `txlevel.py` replays the state after every transaction (Swap + Mint/Burn), checks it against archive snapshots and finds intra-block episodes the block level misses. `closers.py` identifies and classifies the transaction that closed each one.
 - `contracts/`: Foundry project. `V3ArbExecutor` (atomic two-pool v3 arbitrage through nested swap callbacks, factory-verified pools, onlyOwner, no funds held) and fork tests at block 520884405.
 
 ## Status
@@ -84,31 +99,69 @@ interpreter (e.g. 3.14.0a5) crashes on the locked wheels.
 | In progress | LEARNING.md, updated after each component | `LEARNING.md` |
 | Done | Exact multi-tick sizing per episode (peak block), single-tick kept for comparison | `tests/test_replay_multitick.py`; run `20261104T211446Z_c57f8b8` |
 | Done | Foundry arbitrage contract and fork tests (`contracts/`) | `forge test`: 18/18 pass (SYNTHETIC gap scenarios, callback auth, revert paths, 256-run fuzz, 30/30 on-chain swap parity with the Python vectors); run `20261105T190351Z_94c0dfb` |
-| Planned | Longer windows and more pools/DEXs | none yet |
+| Done | Transaction-level replay (Swap + Mint/Burn), archive data-quality checks, block vs tx comparison | `tests/test_replay_txlevel.py`; run `20261109T213505Z_a42a515` (0/492 mismatches) |
+| Done | Gas from the executor's forge report + per-block L1 price, sensitivity ×0.5/×1/×2 | `tests/test_replay_gas.py`; run `20261109T213505Z_a42a515` |
+| Done | 24-hour window, one-pass Swap + Mint/Burn collection, Multicall3 tick reads | `tests/test_swaps_collector.py`; run `20261109T213505Z_a42a515` |
+| Done | SushiSwap v3 WETH/USDC 0.05% (factory from Sushi's package, verified on-chain) | `tests/test_registry.py` |
+| Done | Who closed the gaps: closer sender/contract/index/gas, receipt-based closer kind | `tests/test_closers.py`; run `20261109T213505Z_a42a515` |
+| Planned | Executor support for a second factory (Sushi pairs), gas per trade size | none yet |
 
 ## Limitations
 
 - **Exact sizing, idealised execution.** Gross profit is the exact multi-tick optimum on the
-  on-chain state at each episode's peak block, but it still assumes perfect execution at the
-  end-of-block state and no competition. The peak block itself is chosen with the single-tick
-  approximation.
-- **Gas estimate.** One NodeInterface simulation per pair, routed through SwapRouter02 rather
-  than a dedicated arbitrage contract, so it likely overstates gas. It is priced at each
-  episode's peak-block base fee. The L1 data price was 0 at the probe block because of
-  Arbitrum's L1 pricing surplus; this was measured, not assumed. Gas is probed once per run.
+  on-chain state at each episode's peak, block-level or transaction-level. It still assumes
+  perfect execution and no competition. At the transaction level, it assumes our transaction
+  sits right behind the one that opened the gap. The closer analysis shows that slot is
+  contested: 76% of gaps are gone after one transaction.
+- **Gas from one SYNTHETIC trade.** `execute()` = 340,692 L2 gas from a 50,000-USDC fork trade
+  that crosses many ticks. That probably overstates the gas of the few-dollar trades here,
+  hence the ×0.5/×1/×2 table. Intrinsic and L1 gas are measured per peak block. L1 data gas
+  was 0 at every peak block (Arbitrum's L1 pricing surplus), as measured, not assumed. No
+  priority fee or Timeboost bid is modelled.
+- **Executor coverage.** `V3ArbExecutor` verifies pools against the Uniswap factory only, so
+  Sushi pairs are reported but flagged `executable_by_executor = false`. Sushi sizing uses the
+  Uniswap v3 swap port; Sushi has not been parity-tested against its own quoter.
+- **Closer classification is by receipt, not intent.** "Multi-pool" mixes cross-venue
+  arbitrage and aggregator routes. "Single pool" mixes directional trades and CEX-DEX
+  arbitrage. The recognised Swap events are not exhaustive.
 - **No on-chain execution.** The executor is tested on a local fork only. No transactions are
-  sent and the repo holds no keys. The fork profit (519.94 USDC) is from a SYNTHETIC gap that a
-  test account created with a 100 WETH dump; it is not a real opportunity. Forge gas figures are
-  L2 execution only (no L1 data fee).
-- **Uniswap v3 pools only**: the WETH/USDC 0.01%, 0.05% and 0.30% tiers.
+  sent and the repo holds no keys. The fork profit (519.94 USDC) is from a SYNTHETIC gap.
 - Other simplifications:
   - The window ends at the *finalized* block.
-  - Gaps that open and close within a single block are invisible.
-  - In-range liquidity changes from Mint/Burn between swaps are not replayed.
+  - Block-level gap detection uses swap-only liquidity, which was stale at 37 of 492
+    checkpoints. The transaction level replays Mint/Burn and matched at all 492.
   - Summing across pairs double-counts shared liquidity.
   - 1 USDC = 1 USD.
 
 ## Changelog
+
+### 2026-11-09
+- Transaction-level replay (`research/replay/txlevel.py`):
+  - Mint/Burn collection; events ordered by (block, tx index, log index).
+  - State is rebuilt after every transaction and checked against archive
+    `slot0()`/`liquidity()` every 2,500 blocks: 0/492 mismatches.
+  - Intra-block episodes with durations in transactions, plus a block-vs-transaction
+    comparison in `summary.md`. A built-in consistency check against the block level passed.
+- Gas:
+  - The SwapRouter02 probe is replaced by the executor's forge `execute()` gas (340,692) plus
+    NodeInterface intrinsic and L1 gas at each episode's peak block.
+  - ArbGasInfo L1 prices are recorded per peak block.
+  - Sensitivity table ×0.5/×1/×2.
+- 24-hour window (306,363 blocks):
+  - One-pass Swap + Mint/Burn collection (`data/collectors/pool_logs.py`); swap rows now
+    carry `transactionIndex`.
+  - Tick snapshots read through Multicall3, verified at use.
+- SushiSwap v3 WETH/USDC 0.05% added to the registry after on-chain checks (factory from
+  Sushi's `sushi` package v7.6.1; `getPool`, `fee()`, `tickSpacing()`, tokens, callback
+  selector in bytecode). The other Sushi tiers are dust and were left out.
+- Who closed the gaps (`research/analytics/closers.py`):
+  - For each closing transaction: sender, `to`, index, gas used and the pools it swapped in.
+  - Rankings by sender and by contract, top-5 shares, delay medians.
+  - A chart of the top contracts and a competition reading in `summary.md`.
+- RPC robustness: the web3 provider retries 429/5xx, and `RpcClient` retries Alchemy's
+  transient "layer stale" error.
+- The replay result moves to 24 h: run `20261109T213505Z_a42a515`.
+
 
 ### 2026-11-05
 - Foundry project in `contracts/` (forge-std v1.17.0 submodule, solc 0.8.28, Cancun). The fork

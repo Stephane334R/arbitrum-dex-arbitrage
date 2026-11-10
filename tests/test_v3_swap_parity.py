@@ -107,7 +107,7 @@ def test_tick_math_against_swap_logs():
     files = list(Path(CACHE_ROOT).glob("*/*.parquet"))
     if not files:
         pytest.skip("no cached swaps; run `uv run python -m data.collectors.swaps` first")
-    df = pl.concat([pl.read_parquet(f) for f in files])
+    df = pl.concat([pl.read_parquet(f) for f in files], how="diagonal_relaxed")  # newer files add transaction_index
     for s, t in zip(df["sqrt_price_x96"].to_list(), df["tick"].to_list()):
         computed = get_tick_at_sqrt_ratio(int(s))
         on_boundary = get_sqrt_ratio_at_tick(computed) == int(s)

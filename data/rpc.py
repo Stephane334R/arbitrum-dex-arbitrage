@@ -12,9 +12,14 @@ from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from web3 import Web3
 
 ARBITRUM_CHAIN_ID = 42161
+# Provider-side JSON-RPC errors that are retried (seen on Alchemy: "layer stale" from a lagging
+# archive backend). Anything else is a real error and raises at once.
+TRANSIENT_MESSAGES = ("layer stale",)
 
 
 def load_rpc_url() -> str:
@@ -40,9 +45,22 @@ def redact(text: object, url: str) -> str:
     return s
 
 
+def _retrying_session(max_retries: int = 8, backoff_s: float = 0.5) -> requests.Session:
+    """Session that retries HTTP 429/5xx with exponential backoff, like RpcClient. POST is
+    retried too: this repo only sends read calls (eth_call, eth_getLogs, ...), which are
+    idempotent. It never sends transactions."""
+    retry = Retry(total=max_retries, backoff_factor=backoff_s, backoff_max=30,
+                  status_forcelist=(429, 500, 502, 503, 504), allowed_methods=None,
+                  respect_retry_after_header=True, raise_on_status=False)
+    s = requests.Session()
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    s.mount("http://", HTTPAdapter(max_retries=retry))
+    return s
+
+
 def get_web3(url: str | None = None) -> Web3:
     url = url or load_rpc_url()
-    w3 = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 30}))
+    w3 = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 30}, session=_retrying_session()))
     chain_id = w3.eth.chain_id
     if chain_id != ARBITRUM_CHAIN_ID:
         raise RuntimeError(f"RPC is on chain {chain_id}, expected Arbitrum One ({ARBITRUM_CHAIN_ID})")
@@ -97,6 +115,9 @@ class RpcClient:
             code, msg = err.get("code"), str(err.get("message", ""))
             if code == 429 or "rate limit" in msg.lower() or "exceeded its compute units" in msg.lower():
                 last = f"rate limited ({code})"
+                continue
+            if any(t in msg.lower() for t in TRANSIENT_MESSAGES):
+                last = f"transient provider error ({code}): {redact(msg, self.url)}"
                 continue
             raise RpcError(code, redact(msg, self.url))
         raise RpcError(None, redact(f"gave up after {self.max_retries} retries; last: {last}", self.url))

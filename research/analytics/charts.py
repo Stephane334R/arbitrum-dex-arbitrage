@@ -12,6 +12,7 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.ticker  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import polars as pl  # noqa: E402
@@ -20,7 +21,7 @@ SURFACE = "#fcfcfb"
 TEXT = "#0b0b0b"
 TEXT_2 = "#52514e"
 GRID = "#e4e3df"
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a"]  # palette slots 1-3
+SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]  # categorical palette slots 1-4, fixed order
 
 
 def _style(ax) -> None:
@@ -94,23 +95,31 @@ def duration_histogram(episodes: pl.DataFrame, path: Path) -> None:
     plt.close(fig)
 
 
-def episode_prices(price_rows: pl.DataFrame, episode: dict, fees: list[int], path: Path, pad_blocks: int = 40) -> None:
+def pool_display_name(label: str) -> str:
+    """'500' -> '0.05% Uni v3', 'sushi500' -> '0.05% Sushi v3' (registry pool labels)."""
+    digits = "".join(ch for ch in label if ch.isdigit())
+    dex = "Uni v3" if label.isdigit() else label[: len(label) - len(digits)].capitalize() + " v3"
+    return f"{int(digits) / 1_000_000:.2%} {dex}"
+
+
+def episode_prices(price_rows: pl.DataFrame, episode: dict, labels: list[str], path: Path, pad_blocks: int = 40) -> None:
     """Step plot of each pool's price (USDC/WETH) around one episode, episode shaded.
-    `price_rows`: block_start plus one price column per fee tier, e.g. 'p_500'."""
+    `price_rows`: block_start plus one price column per pool label, e.g. 'p_500', 'p_sushi500'."""
     lo, hi = episode["start_block"] - pad_blocks, episode["end_block"] + pad_blocks
     lo = max(lo, int(price_rows["block_start"].min()))
     first = price_rows.filter(pl.col("block_start") <= lo)["block_start"].max()  # state in force at `lo`
     d = price_rows.filter(pl.col("block_start").is_between(first, hi))
     fig, ax = _fig(figsize=(8, 4))
     x = d["block_start"].to_numpy()
-    for k, fee in enumerate(fees):
-        y = d[f"p_{fee}"].to_numpy()
+    for k, label in enumerate(labels):
+        y = d[f"p_{label}"].to_numpy()
         xs, ys = np.append(np.maximum(x, lo), hi), np.append(y, y[-1])
-        ax.step(xs, ys, where="post", color=SERIES[k], linewidth=2, label=f"{fee / 1_000_000:.2%} pool")
-        ax.text(hi, ys[-1], f"  {fee / 1_000_000:.2%}", color=TEXT, fontsize=8.5, va="center")
+        name = pool_display_name(label)
+        ax.step(xs, ys, where="post", color=SERIES[k % len(SERIES)], linewidth=2, label=name)
+        ax.text(hi, ys[-1], f"  {name}", color=TEXT, fontsize=8.5, va="center")
     ax.axvspan(episode["start_block"], episode["end_block"] + 1, color=TEXT_2, alpha=0.12, linewidth=0)
     ax.text(episode["start_block"], 1.0, f" episode {episode['pair']}: peak gap {episode['peak_gap_bps']:.1f} bps,\n"
-            f" gross ≤ ${episode['peak_gross_usdc']:.2f} (single-tick upper bound)",
+            f" gross ${episode['peak_gross_usdc']:.4f} (exact multi-tick)",
             transform=ax.get_xaxis_transform(), va="top", fontsize=8.5, color=TEXT)
     ax.set_xlim(lo, hi + (hi - lo) * 0.08)
     ax.ticklabel_format(axis="x", style="plain", useOffset=False)
@@ -118,6 +127,42 @@ def episode_prices(price_rows: pl.DataFrame, episode: dict, fees: list[int], pat
     ax.set_ylabel("USDC per WETH (end of block)")
     ax.legend(frameon=False, fontsize=8.5, loc="lower left", labelcolor=TEXT)
     ax.set_title("Pool prices around the largest episode (by peak gross profit)", fontsize=10, color=TEXT, loc="left")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def closers_bar(ranking: pl.DataFrame, n_closed: int, path: Path, key: str = "to") -> None:
+    """Top closing-transaction `to` contracts (key="to") or senders (key="sender") by gaps closed:
+    horizontal bars, one series, value at the tip. Closer kind is not encoded by colour: identity
+    stays text, and the label carries the share and (for contracts) the number of senders and the
+    multi-pool share."""
+    d = ranking.head(10)
+    n = d.height
+    fig, ax = _fig(figsize=(7.5, 0.42 * max(n, 3) + 1.3))
+    if n:
+        y = np.arange(n)[::-1]
+        counts = d["gaps_closed"].to_numpy()
+        # 0.42 in per row at 150 dpi = 63 px; height 0.35 -> about 22 px bars (spec: <= 24 px).
+        ax.barh(y, counts, height=0.35, color=SERIES[0])
+        ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
+        ax.set_yticks(y, [f"{s[:6]}…{s[-4:]}" for s in d[key].to_list()], fontsize=8.5, family="monospace")
+        for i, (yi, c) in enumerate(zip(y, counts)):
+            r = d.row(i, named=True)
+            parts = [f"{c} ({r['share']:.0%})"]
+            if key == "to":
+                parts.append(f"{r['senders']} sender{'s' if r['senders'] != 1 else ''}")
+            if "multi_pool_share" in r:
+                parts.append(f"{r['multi_pool_share'] + r['both_pools_share']:.0%} multi-pool")
+            else:
+                parts.append(f"{r['both_pools_share']:.0%} traded both pools")
+            ax.text(c, yi, "  " + " · ".join(parts), va="center", fontsize=8.5, color=TEXT)
+        ax.set_xlim(0, counts.max() * 2.0)
+        ax.grid(axis="y", visible=False)
+    ax.set_xlabel("gaps closed (transaction-level episodes)")
+    what = "contracts (tx 'to')" if key == "to" else "senders"
+    ax.set_title(f"Gaps closed by the top {n} {what}, of {n_closed} closed episodes",
+                 fontsize=10, color=TEXT, loc="left")
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)

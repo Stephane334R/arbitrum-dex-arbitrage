@@ -287,7 +287,8 @@ episodes and saves metrics, episodes, config and charts to `research/results/<ru
 - *Closed-form sizing.* Two chained constant-product swaps give `out(d) = a·d/(b + c·d)`,
   so the optimum is `d* = (√(ab) − b)/c` and the profit is `(√a − √b)²/c`. A test checks
   this against brute-force simulation.
-- *Gas from NodeInterface.* `gasEstimateComponents` simulates a real SwapRouter02 round trip
+- *Gas from NodeInterface (superseded on 2026-11-09 by the executor's forge gas plus per-block
+  NodeInterface intrinsic/L1 gas; see "Gas from the executor" below).* `gasEstimateComponents` simulates a real SwapRouter02 round trip
   (WETH → USDC in one pool → WETH in the other), using a state-overridden sender balance.
   The router address is verified on-chain first. Replaying an observed arbitrage bot's
   transaction reverted, as such state-dependent transactions do, so a router call was the
@@ -396,6 +397,353 @@ competitor, as before.
 profit. Update tick maps incrementally from Mint/Burn logs instead of re-reading storage per
 block. Optimise the full route (both directions, all pairs together, shared-pool contention).
 Check the chosen sizes against a fork simulation of the real arbitrage contract.
+
+### Transaction-level replay (`research/replay/txlevel.py`, `data/collectors/liquidity_events.py`, `data/collectors/tx_index.py`)
+
+**What it does.** It runs next to the block-level replay. It rebuilds each pool's state after
+*every transaction*, not once per block, and then finds gaps and episodes with the same rules.
+Steps:
+1. Collect Mint and Burn logs for the same pools and window, cached like the Swaps.
+2. Merge them with the Swaps and sort by (block, transaction index, log index).
+3. Replay the state. A Swap sets sqrtPriceX96, tick and liquidity to the values in its event. A
+   Mint or Burn adds or removes `amount` from liquidity when `tickLower <= tick < tickUpper`.
+4. Every `snapshot_every_blocks` blocks, compare the replayed state with archive
+   `slot0()`/`liquidity()` and report the mismatch rate.
+5. Find episodes. One can now open and close inside a single block. Durations are measured in
+   transactions, in blocks and in seconds.
+6. Size each episode exactly at its peak transaction, then compare with the block-level
+   episodes: which ones the block level saw, which it missed, and how big the missed ones were.
+
+**Why this implementation.**
+- *Why it matters for competition.* On Arbitrum the sequencer orders transactions by arrival
+  (first come, first served, plus the Timeboost express lane). A searcher does not wait for the
+  end of a block. They send a backrun as soon as they see the transaction that opened the gap.
+  If the backrun lands right after it in the same block, the gap never exists at a block
+  boundary. So the block-level replay mostly sees gaps that *nobody* closed fast. Those are the
+  leftovers, not the competition. The transaction-level replay sees the gaps that were closed:
+  how many there were, how big they were, how many transactions they survived, and whether the
+  closing transaction traded both pools (`closer_touches_both_pools`, the mark of an arbitrage).
+  This turns "how often are pools out of line at block ends?" into "how often does an
+  opportunity appear, and how fast does someone take it?".
+- *Exact state, checked against the chain.* A Swap event carries the pool's post-swap slot0
+  price, tick and in-range liquidity. Mint and Burn follow the pool's own `_modifyPosition`
+  rule. No other function moves those three values. So with complete logs the replay is exact,
+  and the archive checkpoints test that claim instead of assuming it. The same checkpoints
+  also count how often the block level's swap-only liquidity was stale.
+- *Transactions, not events.* State is recorded after each transaction. A state in the middle
+  of a transaction (between the two legs of someone else's arbitrage) cannot be traded against.
+- *Per-pair rows.* Only transactions that touch one of a pair's two pools can change its gap.
+  So `duration_txs` counts those transactions, and `tx_index_distance` (same-block episodes
+  only) counts every transaction in between.
+- *Transaction index without re-fetching swaps.* The swap cache stored `logIndex` but not
+  `transactionIndex`. Re-fetching 20,000 blocks of Swaps would break the cache rule, so each swap
+  tx hash is looked up once (`eth_getTransactionByHash`) and cached. `check_order` then checks
+  that the order by (tx index, log index) matches the block-wide logIndex, and that each tx hash
+  has a single index.
+- *Built-in cross-check.* Both replays read the same exact prices, so the blocks at whose end a
+  transaction-level episode is open must equal the block-level episode blocks. The run fails
+  otherwise.
+- *Shared collector.* `swaps.py` now takes a `LogSpec` (event topics, decoder, schema, cache
+  root), so Mint/Burn reuse the same range bookkeeping, chunking, retry and atomic writes.
+
+**Assumptions.**
+- The logs are complete: every Swap/Mint/Burn of the pools is in the cache.
+- Logs from finalized blocks only (as for the swaps).
+- Exact multi-tick sizing at the peak transaction reads the tick table at the end of the
+  previous block and replaces price, tick and liquidity with the replayed values. That is exact
+  unless a Mint/Burn of that pool earlier in the same block changed an initialized tick, which
+  `mt_tick_table_exact` flags.
+- Gross profit at an intra-block state assumes we could have placed our transaction right
+  after the opener. It measures what existed, not what was capturable.
+
+**What can go wrong.**
+- A missing log (provider gap, a pool event signature not collected) silently corrupts the state
+  until the next Swap. Liquidity is the field at risk, because Swaps reset price and tick. The
+  checkpoints catch it, but only at checkpoint blocks. A Burn that drives liquidity negative
+  raises immediately.
+- Tick-boundary edge cases: a Mint whose `tickUpper` equals the current tick is out of range.
+  The pool's rule is lower-inclusive, upper-exclusive, and this is tested.
+- An event emitted by another contract with the same signature (e.g. a v3 fork) is filtered
+  out by the `address` filter, but a registry mistake would let it in.
+- Same-second timestamps: most intra-block durations are 0 s, so the transaction-based
+  durations are the useful ones.
+
+**Production-grade.**
+- Stream logs live (websocket or the sequencer feed) and update the state incrementally.
+  The replay is already an event-driven state machine, so the same `apply_event` can run on
+  live data.
+- Persist the tick table and update it from Mint/Burn too, so intra-block multi-tick sizing is
+  exact without archive reads.
+- Measure latency directly: the sequencer feed gives arrival order. Pending-transaction
+  timestamps would show how many milliseconds a backrun had.
+- Classify closers (known bot contracts, router vs direct pool calls) to see who wins and at
+  what gas price, and model a realistic capture rate instead of assuming every gap is ours.
+
+**First result (20,000-block window, run `20261109T192320Z_a42a515`, uncommitted tree, old
+SwapRouter gas).**
+- 0 of 120 archive checkpoints mismatched. The swap-only liquidity the block level uses was
+  stale at 19 of 120.
+- 17 transaction-level episodes vs 9 block-level. The 8 missed ones (all intra-block, median 1
+  transaction on the pair's pools) hold 76% of the gross.
+- The consistency check passed.
+
+**24-hour result (run `20261109T213505Z_a42a515`).**
+- 0 of 492 (block, pool) checkpoints mismatched on any field. Swap-only liquidity was stale at
+  37 of 492.
+- 542 transaction-level episodes against 312 block-level. The block level missed 226 (41.7%),
+  all intra-block. They hold $1.23 of the $2.15 transaction-level gross (57%) and 15 of the 23
+  net-positive episodes. Median missed gap 7.3 bps, largest 37.2 bps.
+- The consistency check passed. 4 block-level episodes contain more than one transaction-level
+  episode, where the gap closed and reopened inside one block.
+
+### Gas from the executor, L1 price per peak block, sensitivity (`research/replay/gas.py`)
+
+**What it does.** Gas per episode is now
+`execute() L2 gas (forge) + intrinsic L2 gas + L1 data gas`, priced at the peak block's base
+fee:
+- The `execute()` figure is parsed from the saved fork-test run's `config.json`
+  (`gas.synthetic_execute` = 340,692).
+- Intrinsic and L1 gas come from an archive `NodeInterface.gasEstimateComponents` call at
+  **each episode's peak block**. The call carries the episode's own `execute(...)` calldata and
+  targets an address with no code, so only intrinsic and L1 gas are charged.
+- At the same block it records `ArbGasInfo.getL1BaseFeeEstimate()` and `getPricesInWei()`.
+
+A sensitivity table gives M (net-positive episodes) and total net at gas ×0.5, ×1 and ×2, for
+both replay levels.
+
+**Why this implementation.**
+- *The contract we would actually use.* The SwapRouter02 probe measured someone else's code
+  path: router overhead, path decoding, WETH wrapping. The executor's own gas is what matters.
+- *Which forge number.* The gas report's `execute()` row aggregates 269 calls: reverts
+  (min 22,839) and large fuzz sizes (median 704,361). None of them is a real trade. The
+  fork-test runner already isolates the one successful SYNTHETIC `execute`, so that is the
+  number used. The parser refuses a figure that aggregates more than one call.
+- *Forge leaves out what the transaction adds.* Forge measures the call frame only. Intrinsic
+  gas and calldata are added from NodeInterface, measured rather than computed by formula. It
+  returned 22,543–22,579, while the geth rule (21,000 + 4/16 gas per calldata byte) gives
+  22,244 for 164 bytes. Using the measured value avoids guessing Nitro's exact rule.
+- *L1 price per block, not per run.* The old probe ran once, at the window's last block. Arbitrum's
+  L1 price follows its batch-posting surplus and can change within a day. An archive call per
+  peak block shows it directly, and the result is cached by (block, calldata).
+- *Sensitivity instead of false precision.* The single largest uncertainty is the execution
+  gas of a small trade. ×0.5 to ×2 brackets it, and the conclusion should be read off the table,
+  not off ×1.
+
+**Assumptions.**
+- 340,692 gas is for one 50,000-USDC SYNTHETIC trade (0.30% → 0.05%) that crosses many
+  initialized ticks. The replay's arbitrages are a few USDC and cross few or none, so this
+  probably overstates their gas. ×0.5 is the plausible lower case.
+- Same gas for every pair, including Uniswap–Sushi pairs, which the executor cannot trade as
+  deployed (see the Sushi section).
+- Base fee = the block header's `baseFeePerGas` (what the block charged). NodeInterface's own
+  `baseFee` output is 0.0200 gwei at blocks whose header says up to 0.0215 gwei. Both are saved.
+  The header value is used because it is the block's actual price.
+- No priority fee. Arbitrum's sequencer ignores tips for ordering (FCFS); Timeboost express-lane
+  bids are not modelled.
+
+**What can go wrong.**
+- If the executor changes, the gas must be re-measured: re-run `research.forktests.run` and point
+  `gas.forktest_run` at the new run.
+- `NodeInterface` is a virtual contract. A provider that does not serve archive `eth_call`s to it
+  fails the run loudly; there is no silent fallback any more.
+- Measured L1 gas was 0 at every peak block so far (the surplus regime). If that changes, gas
+  rises for every episode, which is exactly what per-block recording is for.
+
+**24-hour result.**
+- 222 distinct peak blocks were probed. L1 data gas was 0 at every one, and so were
+  ArbGasInfo's L1 base fee estimate and its price per calldata byte.
+- Total gas was 363,235–363,271 units at 0.0200–0.0219 gwei, which is $0.0163–0.0181 per
+  arbitrage.
+- Sensitivity, M at ×0.5 / ×1 / ×2:
+  - block level: 24 / 4 / 0;
+  - transaction level: 62 / 23 / 8.
+- Only 139 of the 312 block-level episodes are on Uniswap-only pairs; M at ×1 among them is 2.
+- The conclusion does not hinge on the gas figure: even at ×0.5 the block-level net is $0.13
+  per day.
+
+**Production-grade.** Measure gas per trade size and per pair on a fork: a real `execute` at
+each episode's peak block, with the episode's size. Add Timeboost bid costs. Model the
+priority-fee or bid competition among searchers instead of base fee only.
+
+### 24-hour window: one-pass log collection and batched tick reads
+
+**What it does.**
+- The replay window is now 24 h of blocks (520,575,466 – 520,881,828, 306,363 blocks), ending at
+  the first run's last block, so the old window is its last part. The start block comes from a
+  binary search over cached headers (`data/collectors/blocks.first_block_at_or_after`).
+- `data/collectors/pool_logs.py` fetches Swap and Mint/Burn together: one `eth_getLogs` per
+  chunk with an OR-list of topics.
+- Swap rows now carry `transactionIndex` from the log.
+- Tick snapshots read `ticks()` through Multicall3.
+
+**Why this implementation.**
+- *Requests are the bottleneck.* Alchemy Free caps `eth_getLogs` at 10 blocks, so 24 h is about
+  30,600 requests at roughly 5 per second (about 1h45). Separate Swap and Mint/Burn passes would
+  double that. The generalised `collect(specs=[...])` asks each chunk only for the (event, pool)
+  pairs still missing, and drops logs for any (event, pool) range already cached, so the cache
+  rule still holds.
+- *No more per-hash lookups.* Old swap files keep using the cached tx-index lookup. New files
+  have the index in the log, which saves about 1 request per swap transaction.
+- *Multicall3 for ticks.* A 0.05%-pool tick snapshot has about 770 initialized ticks. One
+  `ticks()` call each took minutes per episode; batched, it is 27 calls in about 5 s. The
+  result was identical to the direct-call snapshot of the same block. Multicall3's address is
+  canonical but taken from memory, so it is checked at use: code at the block,
+  `getChainId() == 42161`, and every word's first tick is re-read directly and compared.
+
+**Assumptions.** The provider accepts an OR-list of topic0 values (standard JSON-RPC). The
+24 h window is defined by block timestamps: the first block whose timestamp is
+≥ end − 86,399 s, so the window covers 86,400 one-second timestamp slots.
+
+**What can go wrong.**
+- Sharing the rate limit: anything else run during the fetch (tests, replays) gets HTTP 429.
+  The integration tests' web3 fixture has no retry and errored during the fetch, then passed
+  afterwards.
+- A provider that returns logs for unrequested topics would previously have been decoded as
+  the wrong event. Logs are now routed by topic0, and unknown topics raise.
+- Transient provider errors on long runs:
+  - The 24 h fetch stopped once on HTTP 429 after 8 retries. Progress was cached, and it
+    resumed with `rpc_max_retries: 20`.
+  - The replay then failed twice. Once on a 429 in the web3 provider, which had no retry at
+    all. Once on Alchemy's JSON-RPC error `-32000 layer stale`.
+  - Now both paths retry. The web3 session retries 429/5xx with backoff (POST included; the
+    repo only sends read calls). `RpcClient` treats "layer stale" as transient. Other JSON-RPC
+    errors still raise at once.
+
+**Result.** 306,363 blocks hold 25,154 swaps and 957 Mint/Burn events over 4 pools: 0.01%
+5,359 / 11, 0.05% 16,691 / 862, 0.30% 841 / 78, Sushi 0.05% 2,263 / 6. The resumed fetch made
+23,588 requests (34,953 calls including retries) at 5.9 requests per second.
+
+**Production-grade.** A paid plan or own node (wide `eth_getLogs` ranges), or an indexer. With
+the collector this simple, a week of data is a config change; the limit is RPC budget.
+
+### Who closed the gaps (`research/analytics/closers.py`, `data/collectors/tx_details.py`)
+
+**What it does.** For every closed transaction-level episode, it takes the transaction that
+ended it. That is the first transaction on the pair's pools after which the gap was back under
+the threshold. For each one it fetches the sender, `to`, transaction index and gas used
+(transaction + receipt, cached). It then ranks senders and `to` contracts by gaps closed,
+reports the top-5 shares, and gives the median delay between opening and closing, in
+transactions and in blocks. It also reads each closer's receipt and classifies it by the pools
+it swapped in:
+- *both pools of the pair*;
+- *one of them plus other pools*: cross-venue arbitrage or a multi-hop route;
+- *only one of them*: a directional trade or CEX-DEX arbitrage.
+
+The tables and a bar chart of the top `to` contracts go into `summary.md`; every row is in
+`closers.parquet`.
+
+**Why this implementation.**
+- *The replay already knows the closer.* `find_tx_episodes` records the closing transaction's
+  hash, block and index. The new code only needs one transaction and one receipt per closer.
+  It checks that the chain's block and index for that hash equal the replay's, which catches
+  any ordering bug in the transaction-level replay.
+- *Sender and contract both.* Searchers often rotate many EOAs behind one contract, so a
+  sender ranking alone understates concentration. The `to` ranking (and the number of senders
+  per `to`) shows it.
+- *Arbitrage signature next to every number.* "Closed the gap" is a definition, not an intent.
+  The share of closers that traded both pools of the pair in one transaction separates
+  arbitrage from flow that happened to push the price back.
+- *Why the receipt classification was added.* The first 24 h run showed 0.2% "traded both
+  pools". On its own, that reads as "nobody arbitrages", which the closers' look contradicts:
+  vanity contract addresses, non-ABI selectors such as `0x00000001`, and early positions in
+  the block. The receipt shows the other pools the closer swapped in, so it can tell
+  "arbitrage elsewhere" from "a single swap". Swap topics are computed from their signatures:
+  Uniswap v2/v3/v4 shapes (the v3 one also covers Sushi and Algebra), PancakeSwap v3 and
+  Balancer v2. The list is not exhaustive, so multi-pool is a lower bound.
+- *Chart by contract.* Concentration is a contract-level fact (see the result), so the chart
+  ranks `to` contracts. The sender table is still in the summary.
+
+**Assumptions.** One closer per episode, the transaction that crossed back under the threshold.
+A searcher whose trade only narrowed the gap, before someone else crossed it, gets no credit.
+Gas used is the receipt's total; on Arbitrum that includes `gasUsedForL1`, which is stored
+separately.
+
+**What can go wrong.**
+- Small samples: with tens of closed episodes, a top-5 share is noisy. Read it as indicative.
+- Aggregators and routers as `to` (e.g. a public router) mix many users. A popular router at
+  the top of the `to` ranking means retail flow, not one searcher.
+- An arbitrage that routes through a pool outside the registry (e.g. another DEX) can close a
+  gap while touching only one of the pair's pools. It is then not flagged as "traded both pools".
+
+- The receipt classification cannot separate intents within a class. A multi-hop aggregator
+  route looks like a cross-venue arbitrage, and a CEX-DEX arbitrage looks like a directional
+  swap. Both readings are named in the summary.
+
+**24-hour result (542 closed episodes, 432 distinct closing transactions).**
+
+| Measure | Value |
+|---|---|
+| Closed by the very next transaction on the pair's pools | 76% |
+| Closed inside the block they opened in | 42% |
+| Median delay | 1 transaction, 1 block |
+| Median closing index in the block | 3 |
+| Distinct senders / distinct `to` contracts | 172 / 34 |
+| Gaps closed by the top 5 senders | 25.6% |
+| Gaps closed by the top 5 `to` contracts | 76.0% |
+| Top sender `0x5556…4Fe2` | 16.4%, through contract `0xeF0D…4834` |
+| Top contract `0xEa84…61A2` | 21.6%, 50 senders, always a single swap in one of our pools |
+
+| Closer kind | Count | Share | Gross of those gaps |
+|---|---|---|---|
+| Traded both pools of the pair | 1 | 0.2% | $0.04 |
+| One of our pools plus other pools (Uniswap v4, v2, PancakeSwap v3, …) | 194 | 35.8% | $0.72 |
+| Only one of our pools | 347 | 64.0% | $1.39 |
+
+No closer reverted.
+
+*What it says about competition.*
+- **Speed.** A gap is closed by the next transaction that touches the pool, usually early in a
+  block. Taking one requires being ordered right behind the opener (the FCFS race or
+  Timeboost), not reacting to end-of-block state.
+- **Concentration sits behind contracts.** A sender ranking looks open: 172 senders, top 5 at
+  26%. A handful of contracts, each fed by several EOAs, closes three quarters of the gaps.
+- **These pairs are not where the arbitrage happens.** Two-pool arbitrage of exactly our pairs
+  is almost absent. The gaps are closed by bots and flow that trade our pools against other
+  venues, or against an off-chain price. The thin 0.01% pool (in most of the pairs) follows the
+  market through those trades rather than through arbitrage against the 0.05% pool. For a
+  two-pool v3 executor, this says the opportunity set is small and already served by faster,
+  wider-venue searchers.
+
+**Production-grade.**
+- Label known contracts: routers, aggregators, known searcher contracts.
+- Decode the closer's calldata and internal calls to measure the profit the closer actually
+  made.
+- Compare closer gas price and priority to non-closers. With Timeboost, also check
+  express-lane rounds.
+
+### SushiSwap v3 WETH/USDC (optional item)
+
+**What it does.** Adds the SushiSwap v3 WETH/USDC 0.05% pool
+(`0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296`) to the registry next to the three Uniswap
+pools. Its pairs (`500-sushi500`, etc.) go through the same replay.
+
+**Verification (all passed).**
+- *Factory address source.* docs.sushi.com/contracts/clamm renders its address table from a
+  JS constant, not from the page, so the address was read from Sushi's official `sushi` npm
+  package (v7.6.1), `evm/config/features/sushiswap-v3.ts`:
+  `SUSHISWAP_V3_FACTORY_ADDRESS[ARBITRUM] = 0x1af415a1…231e`. Arbitrum is not in the
+  package's deprecated list.
+- *On-chain checks at block 520,881,828.* The factory has code. `getPool(WETH, USDC, fee)`
+  returns a pool for 100, 500, 3000 and 10000. Each pool's `factory()`, `fee()`,
+  `tickSpacing()` (= the factory's `feeAmountTickSpacing`) and tokens match.
+- *Callback interface.* Each pool's bytecode contains `PUSH4 0xfa461e33`, the
+  `uniswapV3SwapCallback(int256,int256,bytes)` selector the executor implements. That is a
+  bytecode check, not a proof.
+- The registry builder re-runs all of this, including the callback check, for every pool, and
+  re-verified the set at block 522,767,219.
+
+**Why only the 0.05% tier.** In-range liquidity at block 520,881,828 was 3.4e16 for 0.05%,
+against 2.5e10 (0.01%), 1.0e12 (0.30%) and 2.0e10 (1%). The others are dust; including them
+would add pairs whose "gaps" nobody can trade.
+
+**What it does not do (labelled).**
+- **V3ArbExecutor cannot trade Uniswap–Sushi pairs as deployed.** It checks both pools against
+  one immutable factory (Uniswap), so a Sushi pool reverts with `PoolNotFromFactory`. Episodes
+  on those pairs are real price gaps but carry `executable_by_executor = false`. Trading them
+  needs a second trusted factory in the contract, plus fork tests.
+- Exact multi-tick sizing uses the Uniswap v3 swap port on the Sushi pool. The pool is a fork
+  with the same callback and getters, but QuoterV2-style parity against Sushi's own quoter has
+  not been run. The tick-math test does cover all cached Sushi swap logs.
 
 ## Analytics
 

@@ -21,3 +21,7 @@ concurrency: 4
 
 # Write a Parquet file per pool once this many contiguous blocks are buffered.
 flush_blocks: 2000
+
+# Retries per RPC request (exponential backoff, capped at 30 s per wait). A 24 h backfill runs for
+# hours at the provider's rate limit; 8 retries gave up once on a burst of HTTP 429 (2026-11-09).
+rpc_max_retries: 20

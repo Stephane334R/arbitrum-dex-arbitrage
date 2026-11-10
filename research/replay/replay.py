@@ -47,6 +47,11 @@ class PoolMeta:
     weth_is_token0: bool
     weth_decimals: int
     usdc_decimals: int
+    label: str = ""  # registry label, e.g. "500" (Uniswap) or "sushi500"; names pairs
+
+    @property
+    def name(self) -> str:
+        return self.label or str(self.fee)
 
     @property
     def fee_bps(self) -> float:
@@ -70,6 +75,7 @@ def pool_metas(registry: dict) -> list[PoolMeta]:
                 weth_is_token0=w0,
                 weth_decimals=(p["token0"] if w0 else p["token1"])["decimals"],
                 usdc_decimals=(p["token1"] if w0 else p["token0"])["decimals"],
+                label=p.get("label", str(p["fee"])),
             )
         )
     return out
@@ -173,8 +179,10 @@ def optimal_arb(cheap: dict, expensive: dict, mc: PoolMeta, me: PoolMeta) -> dic
 # ---------------------------------------------------------------- 3. per-pair gaps
 
 
-def pair_rows(segments: pl.DataFrame, metas: list[PoolMeta], registry: dict) -> pl.DataFrame:
-    """Per segment and pool pair: prices, gap, threshold, direction and single-tick gross."""
+def pair_rows(segments: pl.DataFrame, metas: list[PoolMeta], registry: dict, carry: tuple[str, ...] = ()) -> pl.DataFrame:
+    """Per segment and pool pair: prices, gap, threshold, direction and single-tick gross.
+    `carry` names extra segment columns copied to every output row (the transaction-level
+    replay passes seq, transaction_index, ...)."""
     pool_cfg = {p["address"]: p for p in registry["pools"]}
     out = []
     for seg in segments.iter_rows(named=True):
@@ -188,7 +196,7 @@ def pair_rows(segments: pl.DataFrame, metas: list[PoolMeta], registry: dict) -> 
             arb = optimal_arb(st(lo_i), st(hi_i), metas[lo_i], metas[hi_i]) if above else {
                 "size_usdc": 0.0, "gross_usdc": 0.0, "within_tick_range": None}
             out.append({
-                "pair": f"{metas[i].fee}-{metas[j].fee}",
+                "pair": f"{metas[i].name}-{metas[j].name}",
                 "block_start": seg["block_start"],
                 "block_end": seg["block_end"],
                 "n_blocks": seg["block_end"] - seg["block_start"] + 1,
@@ -201,6 +209,7 @@ def pair_rows(segments: pl.DataFrame, metas: list[PoolMeta], registry: dict) -> 
                 "threshold_bps": threshold,
                 "above": above,
                 **arb,
+                **{c: seg[c] for c in carry},
             })
     return pl.DataFrame(out, infer_schema_length=None)
 

@@ -46,3 +46,20 @@ def get_headers(client: RpcClient, blocks: list[int], path: Path = HEADERS_PATH,
         cached.write_parquet(tmp)
         os.replace(tmp, path)
     return cached.filter(pl.col("block_number").is_in(list(set(blocks)))).sort("block_number")
+
+
+def first_block_at_or_after(client: RpcClient, ts: int, lo: int, hi: int, path: Path = HEADERS_PATH) -> int:
+    """Smallest block in [lo, hi] whose timestamp is >= ts (block timestamps are non-decreasing).
+    Binary search over cached headers: about log2(hi - lo) header fetches, each cached."""
+    def t(n: int) -> int:
+        return get_headers(client, [n], path).row(0, named=True)["timestamp"]
+
+    if t(hi) < ts:
+        raise ValueError(f"block {hi} is before timestamp {ts}")
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if t(mid) >= ts:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo

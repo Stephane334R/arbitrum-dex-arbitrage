@@ -1,18 +1,19 @@
 # Replay settings (python -m research.replay.run).
 
 # Block window. null/null = the last `blocks` blocks covered by the swap cache for every pool.
-# Pinned to the first run's window (20261103T134604Z_5a6404c) so results stay comparable.
-from_block: 520861829
+# 24 hours of blocks ending at the first run's last block (20261103T134604Z_5a6404c ended at
+# 520881828): 520575466 is the first block with timestamp >= ts(520881828) - 86399 s, found by
+# binary search over headers (data/collectors/blocks.first_block_at_or_after). The earlier
+# 20,000-block window (520861829..520881828) is its last part.
+from_block: 520575466
 to_block: 520881828
-blocks: 20000
+blocks: 306363
 
 gas:
-  # Uniswap SwapRouter02 on Arbitrum, used only as the target of a simulated two-swap call.
-  # Verified on-chain at run time (code exists, factory() and WETH9() match the registry).
-  swap_router02: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
-  probe_amount_weth: 0.1
-  # FIXED ESTIMATE, used only if NodeInterface simulation fails. Labelled in results.
-  fallback_gas_units: 300000
+  # execute() L2 gas comes from this saved fork-test run (research/forktests/run.py):
+  # research/results/<forktest_run>/config.json, gas.synthetic_execute. Intrinsic and L1 data
+  # gas are measured per episode at its peak block (research/replay/gas.py).
+  forktest_run: 20261105T190351Z_94c0dfb
 
 # Assumption: 1 USDC = 1 USD (profits are computed in USDC).
 usdc_usd: 1.0
@@ -24,3 +25,11 @@ multitick:
   words_each_side: 1
   widen_step: 2
   max_words_each_side: 16
+
+# Transaction-level replay (research/replay/txlevel.py), run alongside the block-level one.
+# Needs Mint/Burn logs for the window: `uv run python -m data.collectors.liquidity_events <to_block>`.
+transaction_level:
+  enabled: true
+  # Data-quality check: compare the replayed state with archive slot0()/liquidity() every N
+  # blocks (plus the window's last block), for every pool.
+  snapshot_every_blocks: 2500

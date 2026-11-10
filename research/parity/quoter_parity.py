@@ -96,9 +96,14 @@ def verify_quoter(rpc: RpcClient, quoter: str, registry: dict, block: int) -> di
     return {"address": quoter, "factory": factory, "weth9": weth9, "code_bytes": (len(code) - 2) // 2}
 
 
+def uniswap_pools(registry: dict) -> list[dict]:
+    """QuoterV2 parity covers the Uniswap v3 pools only (the Sushi pool has its own quoter)."""
+    return [p for p in registry["pools"] if p.get("dex", "uniswap_v3") == "uniswap_v3"]
+
+
 def verify_pools_at_block(rpc: RpcClient, registry: dict, block: int) -> None:
     factory = registry["factory"]["address"]
-    for p in registry["pools"]:
+    for p in uniswap_pools(registry):
         data = _sel("getPool(address,address,uint24)") + abi_encode(
             ["address", "address", "uint24"], [p["token0"]["address"], p["token1"]["address"], p["fee"]]
         ).hex()
@@ -219,11 +224,11 @@ def run(url: str) -> int:
         raise VerificationError(f"RPC is on chain {chain_id}, expected {ARBITRUM_CHAIN_ID}")
     quoter = verify_quoter(rpc, cfg["quoter_v2"], registry, block)
     verify_pools_at_block(rpc, registry, block)
-    print(f"verified QuoterV2 {quoter['address']} and {len(registry['pools'])} pools at block {block}")
+    print(f"verified QuoterV2 {quoter['address']} and {len(uniswap_pools(registry))} pools at block {block}")
 
     cache = QuoterCache(quoter["address"], block)
     pools_json, vectors = [], []
-    for p in registry["pools"]:
+    for p in uniswap_pools(registry):
         words = cfg["words_each_side"]
         snap = get_tick_snapshot(rpc, p["address"], block, words)
         if snap.fee != p["fee"] or snap.tick_spacing != p["tick_spacing"]:
@@ -297,7 +302,7 @@ def run(url: str) -> int:
 
     out = RESULTS_ROOT / run_id
     out.mkdir(parents=True, exist_ok=True)
-    config = {**meta, "config": cfg, "pools": [{k: p[k] for k in ("address", "fee", "tick_spacing")} for p in registry["pools"]],
+    config = {**meta, "config": cfg, "pools": [{k: p[k] for k in ("address", "fee", "tick_spacing")} for p in uniswap_pools(registry)],
               "word_windows": {pj["address"]: [pj["word_lo"], pj["word_hi"]] for pj in pools_json},
               "vectors_file": str(VECTORS_PATH.relative_to(ROOT)), "rpc_calls": rpc.calls}
     (out / "config.json").write_text(json.dumps(config, indent=2) + "\n")

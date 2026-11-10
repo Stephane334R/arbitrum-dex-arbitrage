@@ -17,6 +17,11 @@ Big integers are stored as base-10 strings (they do not fit in 64-bit Parquet ty
 Consistency checks on every fetch: each bit set in the bitmap must have ticks().initialized ==
 True and liquidityGross > 0, and must sit on a multiple of tickSpacing.
 
+Batching: the ticks() reads of one bitmap word go through Multicall3.aggregate3 in one eth_call
+(a 0.05%-pool word has up to 256 initialized ticks). Multicall3's address is verified on first
+use at each block range: it must have code and getChainId() must return 42161. Each word's first
+tick is also read directly and must equal the batched result.
+
 Usage:  uv run python -m data.collectors.ticks <pool_address> <block> [words_each_side]
 """
 
@@ -60,6 +65,13 @@ SEL_FEE = _selector("fee()")
 SEL_TICK_SPACING = _selector("tickSpacing()")
 SEL_TICK_BITMAP = _selector("tickBitmap(int16)")
 SEL_TICKS = _selector("ticks(int24)")
+SEL_AGGREGATE3 = _selector("aggregate3((address,bool,bytes)[])")
+SEL_GET_CHAIN_ID = _selector("getChainId()")
+
+# Multicall3's canonical deterministic-deployment address. Not trusted: verify_multicall checks it.
+MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11"
+MULTICALL_BATCH = 128  # ticks() calls per aggregate3 (well under the eth_call gas cap)
+_verified_multicall_blocks: list[int] = []
 
 SLOT0_TYPES = ["uint160", "int24", "uint16", "uint16", "uint16", "uint8", "bool"]
 TICKS_TYPES = ["uint128", "int128", "uint256", "uint256", "int56", "uint160", "uint32", "bool"]
@@ -101,15 +113,51 @@ def _fetch_state(rpc: RpcClient, pool: str, block: int) -> dict:
     }
 
 
+def verify_multicall(rpc: RpcClient, block: int) -> None:
+    """Multicall3 must have code at `block` and report Arbitrum One's chain id. Verified once per
+    process for the earliest block seen (code, once deployed, stays at the address)."""
+    if _verified_multicall_blocks and block >= min(_verified_multicall_blocks):
+        return
+    code = rpc.call("eth_getCode", [MULTICALL3, hex(block)])
+    if len(code) <= 2:
+        raise TickDataError(f"Multicall3 {MULTICALL3}: no code at block {block}")
+    (chain_id,) = _call(rpc, MULTICALL3, SEL_GET_CHAIN_ID, block, ["uint256"])
+    if chain_id != 42161:
+        raise TickDataError(f"Multicall3 getChainId() = {chain_id}, expected 42161")
+    _verified_multicall_blocks.append(block)
+
+
+def _multicall(rpc: RpcClient, calls: list[tuple[str, str]], block: int) -> list[bytes]:
+    """aggregate3 with allowFailure = false: returns each call's return data, in order."""
+    payload = [(to, False, bytes.fromhex(data[2:])) for to, data in calls]
+    data = SEL_AGGREGATE3 + abi_encode(["(address,bool,bytes)[]"], [payload]).hex()
+    raw = rpc.call("eth_call", [{"to": MULTICALL3, "data": data}, hex(block)])
+    (results,) = abi_decode(["(bool,bytes)[]"], bytes.fromhex(raw[2:]))
+    if len(results) != len(calls) or not all(ok for ok, _ in results):
+        raise TickDataError(f"Multicall3 aggregate3 at block {block}: a call failed")
+    return [ret for _, ret in results]
+
+
+def _ticks_batched(rpc: RpcClient, pool: str, block: int, ticks: list[int]) -> list[tuple]:
+    verify_multicall(rpc, block)
+    out = []
+    for i in range(0, len(ticks), MULTICALL_BATCH):
+        batch = ticks[i:i + MULTICALL_BATCH]
+        rets = _multicall(rpc, [(pool, SEL_TICKS + abi_encode(["int24"], [t]).hex()) for t in batch], block)
+        out += [abi_decode(TICKS_TYPES, r) for r in rets]
+    if ticks:  # spot check: the first tick read directly must equal the batched value
+        direct = _call(rpc, pool, SEL_TICKS + abi_encode(["int24"], [ticks[0]]).hex(), block, TICKS_TYPES)
+        if tuple(direct) != tuple(out[0]):
+            raise TickDataError(f"{pool} @ {block}: Multicall3 ticks({ticks[0]}) differs from a direct call")
+    return out
+
+
 def _fetch_word(rpc: RpcClient, pool: str, block: int, word_pos: int, spacing: int) -> list[dict]:
     data = SEL_TICK_BITMAP + abi_encode(["int16"], [word_pos]).hex()
     (bitmap,) = _call(rpc, pool, data, block, ["uint256"])
+    ticks = [(word_pos * 256 + bit) * spacing for bit in range(256) if (bitmap >> bit) & 1]
     rows = []
-    for bit in range(256):
-        if not (bitmap >> bit) & 1:
-            continue
-        tick = (word_pos * 256 + bit) * spacing
-        t = _call(rpc, pool, SEL_TICKS + abi_encode(["int24"], [tick]).hex(), block, TICKS_TYPES)
+    for tick, t in zip(ticks, _ticks_batched(rpc, pool, block, ticks)):
         gross, net, initialized = t[0], t[1], t[7]
         if not initialized or gross == 0:
             raise TickDataError(f"{pool} @ {block}: bitmap bit set for tick {tick} but ticks() says uninitialized")

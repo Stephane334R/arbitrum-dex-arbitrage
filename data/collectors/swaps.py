@@ -20,6 +20,7 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -44,6 +45,7 @@ SCHEMA = {
     "block_timestamp": pl.Int64,
     "tx_hash": pl.Utf8,
     "log_index": pl.Int32,
+    "transaction_index": pl.Int32,  # null in files written before 2026-11-09 (see data/collectors/tx_index.py)
     "sender": pl.Utf8,
     "recipient": pl.Utf8,
     "amount0": pl.Utf8,
@@ -77,6 +79,7 @@ def decode_swap_log(log: dict) -> dict:
         "block_timestamp": int(log["blockTimestamp"], 16),
         "tx_hash": log["transactionHash"],
         "log_index": int(log["logIndex"], 16),
+        "transaction_index": int(log["transactionIndex"], 16) if log.get("transactionIndex") else None,
         "sender": to_checksum_address("0x" + topics[1][-40:]),
         "recipient": to_checksum_address("0x" + topics[2][-40:]),
         "amount0": str(amount0),
@@ -144,9 +147,9 @@ def plan_fetches(gaps_by_pool: dict[str, list[Range]], max_block_range: int) -> 
     return chunks
 
 
-def write_cache_file(pool_dir: Path, rng: Range, rows: list[dict]) -> Path:
+def write_cache_file(pool_dir: Path, rng: Range, rows: list[dict], schema: dict = SCHEMA) -> Path:
     pool_dir.mkdir(parents=True, exist_ok=True)
-    df = pl.DataFrame(rows, schema=SCHEMA).sort(["block_number", "log_index"])
+    df = pl.DataFrame(rows, schema=schema).sort(["block_number", "log_index"])
     path = pool_dir / f"{rng[0]:012d}_{rng[1]:012d}.parquet"
     tmp = path.with_suffix(".parquet.tmp")
     df.write_parquet(tmp)
@@ -155,11 +158,18 @@ def write_cache_file(pool_dir: Path, rng: Range, rows: list[dict]) -> Path:
 
 
 def load_swaps(pool: str, rng: Range | None = None, cache_root: Path = CACHE_ROOT) -> pl.DataFrame:
+    return load_cached(pool, rng, cache_root, SCHEMA)
+
+
+def load_cached(pool: str, rng: Range | None, cache_root: Path, schema: dict) -> pl.DataFrame:
+    """All cached rows of one pool (any event type sharing this cache layout), deduplicated."""
     pool_dir = pool_cache_dir(pool, cache_root)
     files = [pool_dir / f"{a:012d}_{b:012d}.parquet" for a, b in covered_ranges(pool_dir)]
     if not files:
-        return pl.DataFrame(schema=SCHEMA)
-    df = pl.concat([pl.read_parquet(f) for f in files])
+        return pl.DataFrame(schema=schema)
+    # Older files may lack columns added later (e.g. transaction_index): fill them with nulls.
+    df = pl.concat([pl.read_parquet(f) for f in files], how="diagonal_relaxed")
+    df = df.select([(pl.col(c) if c in df.columns else pl.lit(None)).cast(t).alias(c) for c, t in schema.items()])
     if rng is not None:
         df = df.filter(pl.col("block_number").is_between(rng[0], rng[1]))
     return df.unique(["block_number", "log_index"]).sort(["block_number", "log_index"])
@@ -176,18 +186,20 @@ def _is_range_error(e: RpcError) -> bool:
     return any(s in m for s in ("block range", "response size", "too many", "query returned more than", "limit exceeded", "range is too large"))
 
 
-def fetch_logs(client: RpcClient, a: int, b: int, pools: tuple[str, ...]) -> list[dict]:
-    """eth_getLogs for [a, b]; on a range/size error, split the range in half and retry."""
+def fetch_logs(client: RpcClient, a: int, b: int, pools: tuple[str, ...], topic0: tuple[str, ...] = (SWAP_TOPIC,)) -> list[dict]:
+    """eth_getLogs for [a, b] and any of the `topic0` event signatures; on a range/size error,
+    split the range in half and retry."""
+    topics = [topic0[0]] if len(topic0) == 1 else [list(topic0)]
     try:
         return client.call(
             "eth_getLogs",
-            [{"fromBlock": hex(a), "toBlock": hex(b), "address": list(pools), "topics": [SWAP_TOPIC]}],
+            [{"fromBlock": hex(a), "toBlock": hex(b), "address": list(pools), "topics": topics}],
         )
     except RpcError as e:
         if not _is_range_error(e) or a == b:
             raise
         mid = (a + b) // 2
-        return fetch_logs(client, a, mid, pools) + fetch_logs(client, mid + 1, b, pools)
+        return fetch_logs(client, a, mid, pools, topic0) + fetch_logs(client, mid + 1, b, pools, topic0)
 
 
 @dataclass
@@ -210,44 +222,83 @@ def resolve_head(client: RpcClient, head: str | int) -> int:
     return int(client.call("eth_getBlockByNumber", [head, False])["number"], 16)
 
 
-def collect(client: RpcClient, pools: list[str], window: Range, cfg: dict, cache_root: Path = CACHE_ROOT) -> int:
-    """Fetch every missing (pool, block) range in `window` and write it to the cache.
-    Returns the number of eth_getLogs chunks fetched."""
-    gaps = {p: missing_ranges(window, covered_ranges(pool_cache_dir(p, cache_root))) for p in pools}
-    gaps = {p: g for p, g in gaps.items() if g}
+@dataclass(frozen=True)
+class LogSpec:
+    """Which events a cache holds: topic0 values, a decoder for one raw log, the row schema
+    and the cache root. The swap cache is one instance; data/collectors/liquidity_events.py
+    (Mint/Burn) is another."""
+
+    topic0: tuple[str, ...]
+    decode: Callable[[dict], dict]
+    schema: dict
+    cache_root: Path
+
+
+SWAP_SPEC = LogSpec((SWAP_TOPIC,), decode_swap_log, SCHEMA, CACHE_ROOT)
+
+
+def collect(client: RpcClient, pools: list[str], window: Range, cfg: dict, cache_root: Path = CACHE_ROOT,
+            spec: LogSpec = SWAP_SPEC, specs: list[LogSpec] | None = None) -> int:
+    """Fetch every missing (event spec, pool, block) range in `window` and write it to the cache.
+    Returns the number of eth_getLogs chunks fetched.
+
+    With several `specs` (e.g. Swap and Mint/Burn), one request per chunk asks for all the pools
+    and event signatures still missing there, and each log goes to its own spec's cache, so the
+    same block range is fetched once instead of once per event type. Logs for a (spec, pool)
+    that is already cached for the chunk are dropped, never written twice.
+    `cache_root` overrides the root of SWAP_SPEC only (kept for the tests); other specs use
+    their own root."""
+    specs = list(specs) if specs else [spec]
+    root = [cache_root if sp is SWAP_SPEC else sp.cache_root for sp in specs]
+    spec_of_topic = {t.lower(): k for k, sp in enumerate(specs) for t in sp.topic0}
+    gaps = {}
+    for k in range(len(specs)):
+        for p in pools:
+            g = missing_ranges(window, covered_ranges(pool_cache_dir(p, root[k])))
+            if g:
+                gaps[(k, p)] = g
     chunks = plan_fetches(gaps, cfg["max_block_range"])
     if not chunks:
         return 0
 
-    buffers: dict[str, _Buffer] = {}
+    def request(chunk):
+        a, b, keys = chunk
+        addrs = tuple(dict.fromkeys(p for _, p in keys))
+        topic0 = tuple(t for k in sorted({k for k, _ in keys}) for t in specs[k].topic0)
+        return fetch_logs(client, a, b, addrs, topic0)
 
-    def flush(p: str) -> None:
-        buf = buffers.pop(p, None)
+    buffers: dict[tuple[int, str], _Buffer] = {}
+
+    def flush(key: tuple[int, str]) -> None:
+        buf = buffers.pop(key, None)
         if buf is not None:
-            write_cache_file(pool_cache_dir(p, cache_root), buf.rng, buf.rows)
+            k, p = key
+            write_cache_file(pool_cache_dir(p, root[k]), buf.rng, buf.rows, specs[k].schema)
 
     t0, done = time.monotonic(), 0
     try:
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]) as ex:
-            results = ex.map(lambda c: fetch_logs(client, *c), chunks)  # yields in chunk order
-            for (a, b, chunk_pools), logs in zip(chunks, results):
-                by_pool: dict[str, list[dict]] = {p: [] for p in chunk_pools}
+            results = ex.map(request, chunks)  # yields in chunk order
+            for (a, b, keys), logs in zip(chunks, results):
+                by_key: dict[tuple[int, str], list[dict]] = {key: [] for key in keys}
+                pool_key = {p.lower(): p for _, p in keys}
                 for log in logs:
                     if log.get("removed"):
                         raise RuntimeError(f"removed (reorged) log at block {int(log['blockNumber'], 16)}")
-                    row = decode_swap_log(log)
-                    by_pool[row["pool"]].append(row)
-                for p in chunk_pools:
-                    buf = buffers.get(p)
+                    key = (spec_of_topic[log["topics"][0].lower()], pool_key[log["address"].lower()])
+                    if key in by_key:
+                        by_key[key].append(specs[key[0]].decode(log))
+                for key in keys:
+                    buf = buffers.get(key)
                     if buf is not None and buf.rng[1] + 1 != a:
-                        flush(p)
+                        flush(key)
                         buf = None
                     if buf is None:
-                        buf = buffers[p] = _Buffer((a, a - 1))
+                        buf = buffers[key] = _Buffer((a, a - 1))
                     buf.rng = (buf.rng[0], b)
-                    buf.rows.extend(by_pool[p])
+                    buf.rows.extend(by_key[key])
                     if buf.rng[1] - buf.rng[0] + 1 >= cfg["flush_blocks"]:
-                        flush(p)
+                        flush(key)
                 done += 1
                 if done % 200 == 0 or done == len(chunks):
                     rate = done / (time.monotonic() - t0)
@@ -255,8 +306,8 @@ def collect(client: RpcClient, pools: list[str], window: Range, cfg: dict, cache
     finally:
         # Buffers only ever contain fully fetched, contiguous chunks, so saving them on an
         # error or Ctrl-C is safe and keeps progress.
-        for p in list(buffers):
-            flush(p)
+        for key in list(buffers):
+            flush(key)
     return len(chunks)
 
 

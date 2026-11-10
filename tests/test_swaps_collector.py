@@ -84,3 +84,53 @@ def test_resolve_head_accepts_a_finalized_block_number():
         resolve_head(FakeClient(), 1001)  # not finalized yet: could still be reorged
     with pytest.raises(ValueError):
         resolve_head(FakeClient(), "pending")
+
+
+def test_collect_several_specs_one_request_per_chunk(tmp_path):
+    """Swap + Mint/Burn in one pass: each chunk is one eth_getLogs with both topic sets, logs
+    go to their own cache, and a range already cached for one spec is not written again."""
+    from data.collectors.liquidity_events import BURN_TOPIC, LIQUIDITY_SPEC, MINT_TOPIC, load_liquidity_events
+    from data.collectors.swaps import SWAP_SPEC, collect
+    from dataclasses import replace
+
+    liq_spec = replace(LIQUIDITY_SPEC, cache_root=tmp_path / "liq")
+    swap_root = tmp_path / "swaps"
+    write_cache_file(swap_root / POOL.lower(), (100, 109), [])  # swaps already cached for the first chunk
+
+    mint_data = encode(["address", "uint128", "uint256", "uint256"], ["0x" + "44" * 20, 7, 1, 2])
+    mint = {"address": POOL.lower(), "topics": [MINT_TOPIC, "0x" + "00" * 32, "0x" + encode(["int24"], [-10]).hex(),
+                                                 "0x" + encode(["int24"], [10]).hex()],
+            "data": "0x" + mint_data.hex(), "blockNumber": hex(105), "blockTimestamp": hex(1), "transactionHash": "0xaa",
+            "transactionIndex": hex(3), "logIndex": hex(4)}
+    swap_in_cached = {**make_log(block=106), "transactionIndex": hex(2)}  # must be dropped: (swap, 100..109) cached
+    swap_new = {**make_log(block=112), "transactionIndex": hex(9)}
+    calls = []
+
+    class FakeClient:
+        def call(self, method, params):
+            q = params[0]
+            calls.append((int(q["fromBlock"], 16), int(q["toBlock"], 16), q["topics"]))
+            lo, hi = int(q["fromBlock"], 16), int(q["toBlock"], 16)
+            return [l for l in (mint, swap_in_cached, swap_new) if lo <= int(l["blockNumber"], 16) <= hi]
+
+    cfg = {"max_block_range": 10, "concurrency": 1, "flush_blocks": 1000}
+    n = collect(FakeClient(), [POOL], (100, 119), cfg, cache_root=swap_root, specs=[SWAP_SPEC, liq_spec])
+    assert n == 2
+    assert calls[0] == (100, 109, [[MINT_TOPIC, BURN_TOPIC]])  # swaps cached: only Mint/Burn asked (OR-list)
+    assert calls[1] == (110, 119, [[SWAP_TOPIC, MINT_TOPIC, BURN_TOPIC]])
+    sw = load_swaps(POOL, cache_root=swap_root)
+    assert sw["block_number"].to_list() == [112] and sw["transaction_index"].to_list() == [9]
+    liq = load_liquidity_events(POOL, cache_root=tmp_path / "liq")
+    assert liq["block_number"].to_list() == [105] and liq["amount"].to_list() == ["7"]
+    assert covered_ranges(swap_root / POOL.lower()) == [(100, 109), (110, 119)]
+
+
+def test_old_swap_files_without_transaction_index_load_with_nulls(tmp_path):
+    import polars as pl
+    pool_dir = tmp_path / POOL.lower()
+    pool_dir.mkdir()
+    row = decode_swap_log(make_log(block=150))
+    row.pop("transaction_index")
+    pl.DataFrame([row]).write_parquet(pool_dir / f"{100:012d}_{199:012d}.parquet")
+    df = load_swaps(POOL, cache_root=tmp_path)
+    assert df["transaction_index"].to_list() == [None] and df["block_number"].to_list() == [150]
