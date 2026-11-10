@@ -1,0 +1,384 @@
+{
+  "run_id": "20261109T213505Z_a42a515",
+  "block_range": [
+    520575466,
+    520881828
+  ],
+  "block_timestamps": [
+    1793625006,
+    1793711405
+  ],
+  "chain_id": 42161,
+  "registry_verified_at_block": 522767219,
+  "pools": [
+    {
+      "address": "0x6f38e884725a116C9C7fBF208e79FE8828a2595F",
+      "label": "100",
+      "fee": 100,
+      "tick_spacing": 1,
+      "dex": "uniswap_v3"
+    },
+    {
+      "address": "0xC6962004f452bE9203591991D15f6b388e09E8D0",
+      "label": "500",
+      "fee": 500,
+      "tick_spacing": 10,
+      "dex": "uniswap_v3"
+    },
+    {
+      "address": "0xc473e2aEE3441BF9240Be85eb122aBB059A3B57c",
+      "label": "3000",
+      "fee": 3000,
+      "tick_spacing": 60,
+      "dex": "uniswap_v3"
+    },
+    {
+      "address": "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296",
+      "label": "sushi500",
+      "fee": 500,
+      "tick_spacing": 10,
+      "dex": "sushiswap_v3"
+    }
+  ],
+  "thresholds_bps": {
+    "100-500": {
+      "sum_of_fees": 6.0,
+      "exact_breakeven": 6.003101560781391
+    },
+    "100-3000": {
+      "sum_of_fees": 31.0,
+      "exact_breakeven": 31.093380150452358
+    },
+    "100-sushi500": {
+      "sum_of_fees": 6.0,
+      "exact_breakeven": 6.003101560781391
+    },
+    "500-3000": {
+      "sum_of_fees": 35.0,
+      "exact_breakeven": 35.10782472479971
+    },
+    "500-sushi500": {
+      "sum_of_fees": 10.0,
+      "exact_breakeven": 10.007505003126877
+    },
+    "3000-sushi500": {
+      "sum_of_fees": 35.0,
+      "exact_breakeven": 35.10782472479971
+    }
+  },
+  "gas_assumption": {
+    "method": "executor_forge_plus_nodeinterface_per_block",
+    "label": "execute() L2 gas 340,692 from the V3ArbExecutor Foundry gas report (research/results/20261105T190351Z_94c0dfb/config.json gas.synthetic_execute (forge gas report); SYNTHETIC trade: poolA=0.30%, poolB=0.05%, zeroForOne=false (USDC in), amountIn=50,000 USDC, minProfit=1 USDC) + intrinsic and L1 data gas measured per episode with NodeInterface.gasEstimateComponents at the peak block on the episode's own execute() calldata; priced at the peak block's base fee",
+    "execute": {
+      "execute_gas_l2": 340692,
+      "source": "research/results/20261105T190351Z_94c0dfb/config.json gas.synthetic_execute (forge gas report)",
+      "scenario": "poolA=0.30%, poolB=0.05%, zeroForOne=false (USDC in), amountIn=50,000 USDC, minProfit=1 USDC",
+      "fork_block": 520884405,
+      "git_commit": "94c0dfb6a469764b50b1c9bf838cd8c6e7d7a703",
+      "all_execute_calls": {
+        "calls": 269,
+        "min": 22839,
+        "mean": 621504,
+        "median": 704361,
+        "max": 963430
+      }
+    }
+  },
+  "gas_sensitivity": {
+    "block_level": [
+      {
+        "k": 0.5,
+        "M": 24,
+        "net_usdc": 0.13188421911318957
+      },
+      {
+        "k": 1.0,
+        "M": 4,
+        "net_usdc": 0.020437307535563297
+      },
+      {
+        "k": 2.0,
+        "M": 0,
+        "net_usdc": 0.0
+      }
+    ],
+    "transaction_level": [
+      {
+        "k": 0.5,
+        "M": 62,
+        "net_usdc": 0.925903657918075
+      },
+      {
+        "k": 1.0,
+        "M": 23,
+        "net_usdc": 0.6046483572424676
+      },
+      {
+        "k": 2.0,
+        "M": 8,
+        "net_usdc": 0.3733921997290144
+      }
+    ]
+  },
+  "usdc_usd": 1.0,
+  "rpc_provider": "arb-mainnet.g.alchemy.com",
+  "git_commit": "a42a515e66bae17b2598568b05c88253abf45a5c",
+  "git_dirty": true,
+  "config": {
+    "from_block": 520575466,
+    "to_block": 520881828,
+    "blocks": 306363,
+    "gas": {
+      "forktest_run": "20261105T190351Z_94c0dfb"
+    },
+    "usdc_usd": 1.0,
+    "multitick": {
+      "words_each_side": 1,
+      "widen_step": 2,
+      "max_words_each_side": 16
+    },
+    "transaction_level": {
+      "enabled": true,
+      "snapshot_every_blocks": 2500
+    }
+  },
+  "simplifications": [
+    "Gross profit is the EXACT multi-tick optimum at the episode's peak block: both legs run through the Uniswap v3 swap port (data/pricing/v3_swap.py, QuoterV2-parity tested) on the on-chain tick state at that block; optimal size by integer search (within a few raw units of the true optimum). It still assumes perfect execution at the end-of-block state and no competition.",
+    "The peak block is chosen by the SINGLE-TICK gross (constant product on the current tick's virtual reserves), as in the first run; the single-tick numbers are kept as *_single_tick comparison columns.",
+    "Gap detection uses in-range liquidity forward-filled from Swap events (Mint/Burn between swaps are not replayed); the multi-tick sizing reads the real on-chain liquidity at the peak block instead.",
+    "Gap threshold is the sum of the two fees (spec); the exact break-even 1/((1-fa)(1-fb))-1 is slightly higher and is what the profit formula uses, so a few gross episodes can have ~0 profit.",
+    "Block-level states are end-of-block; gaps opened and closed within one block are invisible to the block-level replay (the transaction-level section, when enabled, measures them).",
+    "Pairs are evaluated independently; simultaneous episodes on pairs sharing a pool compete for the same liquidity, so summed profits overstate what one arbitrageur could capture.",
+    "Gas = execute() L2 gas from ONE SYNTHETIC fork-test trade (50,000 USDC, 0.30% -> 0.05%, many ticks crossed: probably an overestimate for small arbitrages) + intrinsic and L1 data gas measured per episode at its peak block (NodeInterface, archive eth_call). See the gas sensitivity table for x0.5 / x2.",
+    "V3ArbExecutor verifies pools against the Uniswap v3 factory only: episodes on pairs with the SushiSwap pool are real price gaps but not executable by the contract as deployed (executable_by_executor = false).",
+    "Profits in USDC with 1 USDC = 1 USD."
+  ],
+  "transaction_level": {
+    "liquidity_event_cache": "data/cache/liquidity_events (Mint/Burn)",
+    "n_events": {
+      "swap": 25154,
+      "mint": 348,
+      "burn": 609,
+      "transactions": 25214,
+      "swap_tx_index_looked_up": 1107
+    },
+    "snapshot_every_blocks": 2500,
+    "checkpoint_blocks": [
+      520577965,
+      520580465,
+      520582965,
+      520585465,
+      520587965,
+      520590465,
+      520592965,
+      520595465,
+      520597965,
+      520600465,
+      520602965,
+      520605465,
+      520607965,
+      520610465,
+      520612965,
+      520615465,
+      520617965,
+      520620465,
+      520622965,
+      520625465,
+      520627965,
+      520630465,
+      520632965,
+      520635465,
+      520637965,
+      520640465,
+      520642965,
+      520645465,
+      520647965,
+      520650465,
+      520652965,
+      520655465,
+      520657965,
+      520660465,
+      520662965,
+      520665465,
+      520667965,
+      520670465,
+      520672965,
+      520675465,
+      520677965,
+      520680465,
+      520682965,
+      520685465,
+      520687965,
+      520690465,
+      520692965,
+      520695465,
+      520697965,
+      520700465,
+      520702965,
+      520705465,
+      520707965,
+      520710465,
+      520712965,
+      520715465,
+      520717965,
+      520720465,
+      520722965,
+      520725465,
+      520727965,
+      520730465,
+      520732965,
+      520735465,
+      520737965,
+      520740465,
+      520742965,
+      520745465,
+      520747965,
+      520750465,
+      520752965,
+      520755465,
+      520757965,
+      520760465,
+      520762965,
+      520765465,
+      520767965,
+      520770465,
+      520772965,
+      520775465,
+      520777965,
+      520780465,
+      520782965,
+      520785465,
+      520787965,
+      520790465,
+      520792965,
+      520795465,
+      520797965,
+      520800465,
+      520802965,
+      520805465,
+      520807965,
+      520810465,
+      520812965,
+      520815465,
+      520817965,
+      520820465,
+      520822965,
+      520825465,
+      520827965,
+      520830465,
+      520832965,
+      520835465,
+      520837965,
+      520840465,
+      520842965,
+      520845465,
+      520847965,
+      520850465,
+      520852965,
+      520855465,
+      520857965,
+      520860465,
+      520862965,
+      520865465,
+      520867965,
+      520870465,
+      520872965,
+      520875465,
+      520877965,
+      520880465,
+      520881828
+    ],
+    "data_quality": {
+      "checks": 492,
+      "mismatch_rate": 0.0,
+      "sqrt_mismatches": 0,
+      "tick_mismatches": 0,
+      "liquidity_mismatches": 0,
+      "swap_only_liquidity_mismatches": 37
+    },
+    "comparison": {
+      "consistent": true,
+      "n_tx": 542,
+      "n_block": 312,
+      "n_missed": 226,
+      "n_visible": 316,
+      "n_block_matched": 312,
+      "n_block_with_several_tx_episodes": 4
+    },
+    "closers": {
+      "n_closed": 542,
+      "n_closing_txs": 432,
+      "next_tx_share": 0.7564575645756457,
+      "same_block_share": 0.41697416974169743,
+      "n_senders": 172,
+      "n_to": 34,
+      "top5_share_sender": 0.2564575645756458,
+      "top5_share_to": 0.7601476014760148,
+      "top1_share_sender": 0.16420664206642066,
+      "both_pools_share": 0.0018450184501845018,
+      "failed_closers": 0,
+      "median_delay_txs": 1.0,
+      "median_delay_blocks": 1.0,
+      "median_tx_index_distance": 2.0,
+      "median_close_tx_index": 3.0,
+      "median_gas_used": 229410.5,
+      "median_delay_txs_both_pools": 1.0,
+      "median_delay_blocks_both_pools": 0.0,
+      "median_delay_txs_other": 1.0,
+      "median_delay_blocks_other": 1.0,
+      "by_kind": [
+        {
+          "kind": "both_pools",
+          "n": 1,
+          "share": 0.0018450184501845018,
+          "median_delay_txs": 1.0,
+          "median_delay_blocks": 0.0,
+          "same_block_share": 1.0,
+          "median_close_tx_index": 3.0,
+          "median_gas_used": 191975.0,
+          "gross_usdc": 0.036979
+        },
+        {
+          "kind": "multi_pool",
+          "n": 194,
+          "share": 0.35793357933579334,
+          "median_delay_txs": 1.0,
+          "median_delay_blocks": 1.0,
+          "same_block_share": 0.36082474226804123,
+          "median_close_tx_index": 2.0,
+          "median_gas_used": 301158.0,
+          "gross_usdc": 0.724621
+        },
+        {
+          "kind": "single_pool",
+          "n": 347,
+          "share": 0.6402214022140221,
+          "median_delay_txs": 1.0,
+          "median_delay_blocks": 1.0,
+          "same_block_share": 0.44668587896253603,
+          "median_close_tx_index": 4.0,
+          "median_gas_used": 155208.0,
+          "gross_usdc": 1.391783
+        },
+        {
+          "kind": "unrecognised",
+          "n": 0,
+          "share": 0.0,
+          "median_delay_txs": null,
+          "median_delay_blocks": null,
+          "same_block_share": null,
+          "median_close_tx_index": null,
+          "median_gas_used": null,
+          "gross_usdc": 0.0
+        }
+      ]
+    },
+    "simplifications": [
+      "Transaction-level state is rebuilt from Swap (exact post-swap sqrtPriceX96, tick, liquidity) and Mint/Burn (liquidity +/- amount when tickLower <= tick < tickUpper). Checked against archive slot0()/liquidity() at the checkpoint blocks listed in config.json, not at every transaction.",
+      "Transaction indices come from the logs (transactionIndex) where the cached swap file has them; swaps cached before that column existed were looked up once by tx hash (eth_getTransactionByHash) and cached.",
+      "Exact multi-tick gross at the peak transaction uses the tick table at the end of the previous block with the replayed intra-block price/tick/liquidity; exact unless a Mint/Burn of that pool earlier in the same block changed an initialized tick (mt_tick_table_exact).",
+      "An intra-block opportunity can only be taken by a transaction ordered right after the opener in the same block. The gross figures assume that slot was available to us: they measure what existed, not what was capturable.",
+      "duration_txs counts transactions touching the pair's pools only; tx_index_distance (same-block episodes) counts every transaction in the block between opener and closer."
+    ]
+  }
+}

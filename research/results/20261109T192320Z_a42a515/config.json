@@ -1,0 +1,180 @@
+{
+  "run_id": "20261109T192320Z_a42a515",
+  "block_range": [
+    520861829,
+    520881828
+  ],
+  "block_timestamps": [
+    1793705896,
+    1793711405
+  ],
+  "chain_id": 42161,
+  "registry_verified_at_block": 520884405,
+  "pools": [
+    {
+      "address": "0x6f38e884725a116C9C7fBF208e79FE8828a2595F",
+      "fee": 100,
+      "tick_spacing": 1
+    },
+    {
+      "address": "0xC6962004f452bE9203591991D15f6b388e09E8D0",
+      "fee": 500,
+      "tick_spacing": 10
+    },
+    {
+      "address": "0xc473e2aEE3441BF9240Be85eb122aBB059A3B57c",
+      "fee": 3000,
+      "tick_spacing": 60
+    }
+  ],
+  "thresholds_bps": {
+    "100-500": {
+      "sum_of_fees": 6.0,
+      "exact_breakeven": 6.003101560781391
+    },
+    "100-3000": {
+      "sum_of_fees": 31.0,
+      "exact_breakeven": 31.093380150452358
+    },
+    "500-3000": {
+      "sum_of_fees": 35.0,
+      "exact_breakeven": 35.10782472479971
+    }
+  },
+  "gas_assumption": {
+    "block": 520881828,
+    "per_pair": {
+      "100-500": {
+        "gas_units": 290762,
+        "gas_units_l1": 0,
+        "base_fee_wei": 20006000,
+        "l1_base_fee_estimate_wei": 0
+      },
+      "100-3000": {
+        "gas_units": 290750,
+        "gas_units_l1": 0,
+        "base_fee_wei": 20006000,
+        "l1_base_fee_estimate_wei": 0
+      },
+      "500-3000": {
+        "gas_units": 251460,
+        "gas_units_l1": 0,
+        "base_fee_wei": 20006000,
+        "l1_base_fee_estimate_wei": 0
+      }
+    },
+    "method": "node_interface",
+    "label": "NodeInterface.gasEstimateComponents on a SwapRouter02 two-swap round trip (0.1 WETH, state-overridden sender) at block 520881828; router overhead likely overstates a direct-pool arb contract's gas",
+    "router": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
+  },
+  "usdc_usd": 1.0,
+  "rpc_provider": "arb-mainnet.g.alchemy.com",
+  "git_commit": "a42a515e66bae17b2598568b05c88253abf45a5c",
+  "git_dirty": true,
+  "config": {
+    "from_block": 520861829,
+    "to_block": 520881828,
+    "blocks": 20000,
+    "gas": {
+      "swap_router02": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+      "probe_amount_weth": 0.1,
+      "fallback_gas_units": 300000
+    },
+    "usdc_usd": 1.0,
+    "multitick": {
+      "words_each_side": 1,
+      "widen_step": 2,
+      "max_words_each_side": 16
+    },
+    "transaction_level": {
+      "enabled": true,
+      "snapshot_every_blocks": 500
+    }
+  },
+  "simplifications": [
+    "Gross profit is the EXACT multi-tick optimum at the episode's peak block: both legs run through the Uniswap v3 swap port (data/pricing/v3_swap.py, QuoterV2-parity tested) on the on-chain tick state at that block; optimal size by integer search (within a few raw units of the true optimum). It still assumes perfect execution at the end-of-block state and no competition.",
+    "The peak block is chosen by the SINGLE-TICK gross (constant product on the current tick's virtual reserves), as in the first run; the single-tick numbers are kept as *_single_tick comparison columns.",
+    "Gap detection uses in-range liquidity forward-filled from Swap events (Mint/Burn between swaps are not replayed); the multi-tick sizing reads the real on-chain liquidity at the peak block instead.",
+    "Gap threshold is the sum of the two fees (spec); the exact break-even 1/((1-fa)(1-fb))-1 is slightly higher and is what the profit formula uses, so a few gross episodes can have ~0 profit.",
+    "Block-level states are end-of-block; gaps opened and closed within one block are invisible to the block-level replay (the transaction-level section, when enabled, measures them).",
+    "Pairs are evaluated independently; simultaneous episodes on pairs sharing a pool compete for the same liquidity, so summed profits overstate what one arbitrageur could capture.",
+    "Gas: one representative estimate per pair (see gas_assumption), priced at each episode's peak-block base fee.",
+    "Profits in USDC with 1 USDC = 1 USD."
+  ],
+  "transaction_level": {
+    "liquidity_event_cache": "data/cache/liquidity_events (Mint/Burn)",
+    "n_events": {
+      "swap": 1140,
+      "mint": 20,
+      "burn": 69,
+      "transactions": 1169
+    },
+    "snapshot_every_blocks": 500,
+    "checkpoint_blocks": [
+      520862328,
+      520862828,
+      520863328,
+      520863828,
+      520864328,
+      520864828,
+      520865328,
+      520865828,
+      520866328,
+      520866828,
+      520867328,
+      520867828,
+      520868328,
+      520868828,
+      520869328,
+      520869828,
+      520870328,
+      520870828,
+      520871328,
+      520871828,
+      520872328,
+      520872828,
+      520873328,
+      520873828,
+      520874328,
+      520874828,
+      520875328,
+      520875828,
+      520876328,
+      520876828,
+      520877328,
+      520877828,
+      520878328,
+      520878828,
+      520879328,
+      520879828,
+      520880328,
+      520880828,
+      520881328,
+      520881828
+    ],
+    "data_quality": {
+      "checks": 120,
+      "mismatch_rate": 0.0,
+      "sqrt_mismatches": 0,
+      "tick_mismatches": 0,
+      "liquidity_mismatches": 0,
+      "swap_only_liquidity_mismatches": 19
+    },
+    "comparison": {
+      "consistent": true,
+      "n_tx": 17,
+      "n_block": 9,
+      "n_missed": 8,
+      "n_visible": 9,
+      "n_block_matched": 9,
+      "n_block_with_several_tx_episodes": 0
+    },
+    "simplifications": [
+      "Transaction-level state is rebuilt from Swap (exact post-swap sqrtPriceX96, tick, liquidity) and Mint/Burn (liquidity +/- amount when tickLower <= tick < tickUpper). Checked against archive slot0()/liquidity() at the checkpoint blocks listed in config.json, not at every transaction.",
+      "Swap transaction indices were looked up by tx hash (eth_getTransactionByHash) because the swap cache has no index column; Mint/Burn indices come from their logs.",
+      "Exact multi-tick gross at the peak transaction uses the tick table at the end of the previous block with the replayed intra-block price/tick/liquidity; exact unless a Mint/Burn of that pool earlier in the same block changed an initialized tick (mt_tick_table_exact).",
+      "An intra-block opportunity can only be taken by a transaction ordered right after the opener in the same block. The gross figures assume that slot was available to us: they measure what existed, not what was capturable.",
+      "duration_txs counts transactions touching the pair's pools only; tx_index_distance (same-block episodes) counts every transaction in the block between opener and closer."
+    ]
+  }
+}
